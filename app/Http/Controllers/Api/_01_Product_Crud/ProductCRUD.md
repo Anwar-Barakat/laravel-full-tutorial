@@ -1,4 +1,6 @@
-# Product CRUD API Design
+# Product CRUD API Design (v1 - Basic)
+
+This document outlines the design and implementation of the basic Product CRUD (Create, Read, Update, Delete) API. For an advanced version with filtering, refer to the v2 API documentation.
 
 ## Controller (`app/Http/Controllers/Api/_01_Product_Crud/ProductController.php`):
 
