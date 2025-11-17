@@ -2,16 +2,13 @@
 
 namespace Database\Seeders;
 
-use App\Models\User;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 
-class DatabaseSeeder extends Seeder
+class ProductSeeder extends Seeder
 {
-    use WithoutModelEvents;
-
     public function run(): void
     {
-        $this->call(ProductSeeder::class);
+        \App\Models\Product::factory(10)->create();
     }
 }
