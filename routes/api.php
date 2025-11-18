@@ -21,7 +21,11 @@ use Illuminate\Support\Facades\Route;
 // use App\Http\Controllers\Api\_05_Product_Review_Polymorphic\ReviewController;
 
 // _06_Product_Spatie_Media_Library
-use App\Http\Controllers\Api\_06_Product_Spatie_Media_Library\ProductController as ProductSpatieMediaLibraryController;
+// use App\Http\Controllers\Api\_06_Product_Spatie_Media_Library\ProductController as ProductControllerV6;
+
+// _07_Product_Form_Request_Handling
+use App\Http\Controllers\Api\_07_Product_Form_Request_Handling\ProductController;
+
 
 
 // _01_Product_Crud
@@ -40,5 +44,7 @@ use App\Http\Controllers\Api\_06_Product_Spatie_Media_Library\ProductController 
 // Route::apiResource('products.reviews', ReviewController::class)->only(['index', 'store']);
 
 // _06_Product_Spatie_Media_Library
-Route::apiResource('products', ProductSpatieMediaLibraryController::class);
+// Route::apiResource('products', ProductControllerV6::class); // Commented out for _07_
 
+// _07_Product_Form_Request_Handling
+Route::apiResource('products', ProductController::class);
