@@ -13,7 +13,20 @@ class ProductResource extends JsonResource
             'name' => $this->name,
             'description' => $this->description,
             'price' => $this->price,
-            'image' => $this->image ? asset($this->image) : null,
+            'image' => $this->image ? asset($this->image) : null, // Use model's image attribute
+            'media' => [
+                'image' => [
+                    'url' => $this->getFirstMediaUrl('main_image'),
+                    'thumb_url' => $this->getFirstMediaUrl('main_image', 'thumb'),
+                ],
+                'gallery' => $this->getMedia('gallery_images')->map(function ($media) {
+                    return [
+                        'id' => $media->id,
+                        'url' => $media->getFullUrl(),
+                        'thumb_url' => $media->hasGeneratedConversion('thumb') ? $media->getUrl('thumb') : null,
+                    ];
+                })->toArray(), // Convert collection to array
+            ],
             'category' => $this->whenLoaded('category', new CategoryResource($this->category)),
             'tags' => TagResource::collection($this->whenLoaded('tags') ?? $this->tags),
             'reviews' => ReviewResource::collection($this->whenLoaded('reviews')),
