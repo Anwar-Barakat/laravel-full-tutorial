@@ -16,8 +16,13 @@ use Illuminate\Support\Facades\Route;
 // use App\Http\Controllers\Api\_04_ApiResponse_Refactor\ProductController as ProductResourceController;
 
 // _05_Product_Review_Polymorphic
-use App\Http\Controllers\Api\_05_Product_Review_Polymorphic\ProductController as ProductResourceController;
-use App\Http\Controllers\Api\_05_Product_Review_Polymorphic\ReviewController;
+// _05_Product_Review_Polymorphic
+// use App\Http\Controllers\Api\_05_Product_Review_Polymorphic\ProductController as ProductResourceController; // Commented out
+// use App\Http\Controllers\Api\_05_Product_Review_Polymorphic\ReviewController;
+
+// _06_Product_Spatie_Media_Library
+use App\Http\Controllers\Api\_06_Product_Spatie_Media_Library\ProductController as ProductSpatieMediaLibraryController;
+
 
 // _01_Product_Crud
 // Route::apiResource('products', ProductController::class);
@@ -32,5 +37,8 @@ use App\Http\Controllers\Api\_05_Product_Review_Polymorphic\ReviewController;
 // Route::apiResource('products', ProductResourceController::class);
 
 // _05_Product_Review_Polymorphic
-Route::apiResource('products.reviews', ReviewController::class)->only(['index', 'store']);
+// Route::apiResource('products.reviews', ReviewController::class)->only(['index', 'store']);
+
+// _06_Product_Spatie_Media_Library
+Route::apiResource('products', ProductSpatieMediaLibraryController::class);
 
