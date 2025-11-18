@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\Api\_02_Product_Crud_With_Filter;
+namespace App\Http\Controllers\Api\_03_Product_Crud_With_Resource;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
@@ -10,23 +10,26 @@ use Spatie\QueryBuilder\QueryBuilder;
 use Spatie\QueryBuilder\AllowedFilter;
 use App\Models\Tag;
 use App\Models\Category;
+use App\Http\Resources\ProductResource;
 
 class ProductController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
         $products = QueryBuilder::for(Product::class)
             ->allowedFilters([
-                AllowedFilter::scope('whereName'),
-                AllowedFilter::scope('priceBetween'),
+                AllowedFilter::exact('name'),
+                AllowedFilter::partial('name'),
+                AllowedFilter::exact('description'),
+                AllowedFilter::partial('description'),
                 AllowedFilter::exact('tags.name'),
                 AllowedFilter::partial('tags.name'),
             ])
-            ->allowedSorts('name', 'price', 'created_at')
+            ->allowedSorts(['name', 'price', 'created_at'])
             ->allowedIncludes(['category', 'tags'])
-            ->get();
+            ->paginate(10);
 
-        return response()->json($products);
+        return ProductResource::collection($products);
     }
 
     public function store(Request $request)
@@ -49,12 +52,17 @@ class ProductController extends Controller
             $product->save();
         }
 
-        return response()->json($product, 201);
+        if ($request->has('tags')) {
+            $product->tags()->sync($request->input('tags'));
+        }
+
+        return (new ProductResource($product))->response()->setStatusCode(201);
     }
 
     public function show(string $id)
     {
-        return Product::findOrFail($id);
+        $product = Product::with(['category', 'tags'])->findOrFail($id);
+        return new ProductResource($product);
     }
 
     public function update(Request $request, string $id)
@@ -73,16 +81,19 @@ class ProductController extends Controller
         $product->update($request->except(['image', 'tags']));
 
         if ($request->hasFile('image')) {
-            // Delete old image if it exists
             if ($product->image) {
-                \Illuminate\Support\Facades\Storage::disk('public')->delete($product->image);
+                Storage::disk('public')->delete($product->image);
             }
             $imagePath = $request->file('image')->store('products', 'public');
             $product->image = $imagePath;
             $product->save();
         }
 
-        return response()->json($product);
+        if ($request->has('tags')) {
+            $product->tags()->sync($request->input('tags'));
+        }
+
+        return new ProductResource($product);
     }
 
     public function destroy(string $id)
