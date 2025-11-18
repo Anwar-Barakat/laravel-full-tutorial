@@ -24,6 +24,11 @@ class Product extends Model
         return $this->belongsToMany(Tag::class);
     }
 
+    public function reviews()
+    {
+        return $this->morphMany(Review::class, 'reviewable');
+    }
+
     public function scopeWhereName($query, $name)
     {
         return $query->where('name', 'like', '%' . $name . '%');
