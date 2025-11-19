@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\Api\_07_Product_Form_Request_Handling;
+namespace App\Http\Controllers\Api\_09_Product_Spatie_Role_Permission_With_Policy;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
@@ -13,11 +13,16 @@ use Spatie\QueryBuilder\AllowedFilter;
 use App\Http\Resources\ProductResource;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Auth; // Still useful for general user info if needed elsewhere
 
 class ProductController extends Controller
 {
+    use ApiResponseTrait;
+
     public function index(Request $request)
     {
+        $this->authorize('viewAny', Product::class);
+
         $products = QueryBuilder::for(Product::class)
             ->allowedFilters([
                 AllowedFilter::exact('name'),
@@ -36,6 +41,7 @@ class ProductController extends Controller
 
     public function store(StoreProductRequest $request)
     {
+        $this->authorize('create', Product::class);
 
         return DB::transaction(function () use ($request) {
             $product = Product::create($request->except(['image', 'main_image', 'gallery_images', 'tags']));
@@ -46,7 +52,7 @@ class ProductController extends Controller
                 $product->save();
             }
 
-            if ($request->hasFile('main_image')) { // Re-added: main image media collection handling
+            if ($request->hasFile('main_image')) {
                 $product->addMediaFromRequest('main_image')->toMediaCollection('main_image');
             }
 
@@ -72,17 +78,20 @@ class ProductController extends Controller
             return $this->notFoundResponse('Product not found.');
         }
 
+        $this->authorize('view', $product);
+
         return $this->successResponse(new ProductResource($product), 'Product retrieved successfully.');
     }
 
     public function update(UpdateProductRequest $request, string $id)
     {
-
         $product = Product::find($id);
 
         if (!$product) {
             return $this->notFoundResponse('Product not found.');
         }
+
+        $this->authorize('update', $product);
 
         return DB::transaction(function () use ($request, $product) {
             $product->update($request->except(['image', 'main_image', 'gallery_images', 'tags', 'delete_gallery_images']));
@@ -129,11 +138,11 @@ class ProductController extends Controller
             return $this->notFoundResponse('Product not found.');
         }
 
-        // Delete associated default image file
+        $this->authorize('delete', $product);
+
         if ($product->image) {
             Storage::disk('public')->delete($product->image);
         }
-        // Spatie Media Library automatically handles media deletion when the model is deleted.
         $product->delete();
 
         return $this->successResponse(null, 'Product deleted successfully.', 204);
