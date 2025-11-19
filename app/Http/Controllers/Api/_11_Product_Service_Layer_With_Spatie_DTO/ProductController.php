@@ -1,13 +1,13 @@
 <?php
 
-namespace App\Http\Controllers\Api\_11_Product_Service_Spatie_Data;
+namespace App\Http\Controllers\Api\_11_Product_Service_Layer_With_Spatie_DTO;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Product;
 use App\Http\Traits\ApiResponseTrait;
 use App\Http\Resources\ProductResource;
-use App\Services\_11_Product_Service_Spatie_Data\ProductService;
+use App\Services\_11_Product_Service_Layer_With_Spatie_DTO\ProductService;
 use App\Data\ProductData;
 
 class ProductController extends Controller
