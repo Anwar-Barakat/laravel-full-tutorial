@@ -33,8 +33,11 @@ use App\Http\Controllers\Api\_09_Product_Spatie_Role_Permission_With_Policy\Prod
 // _10_Product_Service_Layer
 use App\Http\Controllers\Api\_10_Product_Service_Layer\ProductController as ProductControllerV10;
 
-// _11_Product_Service_Spatie_Data
-use App\Http\Controllers\Api\_11_Product_Service_Spatie_Data\ProductController as ProductControllerV11;
+// _11_Product_Service_Layer_With_Spatie_DTO
+use App\Http\Controllers\Api\_11_Product_Service_Layer_With_Spatie_DTO\ProductController as ProductControllerV11;
+
+// _12_Product_Action_Layer_With_Spatie_DTO
+use App\Http\Controllers\Api\_12_Product_Action_Layer_With_Spatie_DTO\ProductController as ProductControllerV12;
 
 
 // _01_Product_Crud
@@ -67,5 +70,8 @@ use App\Http\Controllers\Api\_11_Product_Service_Spatie_Data\ProductController a
 // _10_Product_Service_Layer
 // Route::apiResource('products', ProductControllerV10::class);
 
-// _11_Product_Service_Spatie_Data
-Route::apiResource('products', ProductControllerV11::class);
+// _11_Product_Service_Layer_With_Spatie_DTO
+// Route::apiResource('products', ProductControllerV11::class);
+
+// _12_Product_Action_Layer_With_Spatie_DTO
+Route::apiResource('products', ProductControllerV12::class);
