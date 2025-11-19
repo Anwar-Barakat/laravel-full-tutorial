@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Models\Order; // Add this line
+use App\Observers\OrderObserver; // Add this line
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -19,6 +21,6 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        Order::observe(OrderObserver::class); // Add this line
     }
 }

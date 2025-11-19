@@ -2,6 +2,7 @@
 
 namespace App\Data;
 
+use App\Enums\Order\OrderStatusEnum;
 use Spatie\LaravelData\Data;
 use Spatie\LaravelData\DataCollection;
 use Illuminate\Validation\Rule;
@@ -10,8 +11,9 @@ class OrderData extends Data
 {
     public function __construct(
         public ?int $user_id,
+        // public ?string $slug, // Remove slug from constructor
         public float $total_amount,
-        public string $status,
+        public ?OrderStatusEnum $status,
         public ?string $shipping_address,
         public ?string $billing_address,
         public string $payment_method,
@@ -23,13 +25,14 @@ class OrderData extends Data
     {
         return [
             'user_id' => ['nullable', 'integer', 'exists:users,id'],
+            // 'slug' => ['nullable', 'string', 'unique:orders,slug'], // Remove slug validation
             'total_amount' => ['required', 'numeric', 'min:0'],
-            'status' => ['required', 'string', Rule::in(['pending', 'completed', 'cancelled', 'processing'])],
+            'status' => ['nullable', Rule::enum(OrderStatusEnum::class)],
             'shipping_address' => ['nullable', 'string'],
             'billing_address' => ['nullable', 'string'],
             'payment_method' => ['required', 'string'],
             'order_items' => ['required', 'array', 'min:1'],
-            'order_items.*' => ['required', 'array'], // Spatie Data will handle validation of nested DTOs if they have rules()
+            'order_items.*' => ['required', 'array'],
         ];
     }
 }

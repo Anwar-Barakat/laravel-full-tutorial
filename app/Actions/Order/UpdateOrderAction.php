@@ -17,6 +17,7 @@ class UpdateOrderAction
         return DB::transaction(function () use ($order, $orderData) {
             $order->update([
                 'user_id' => $orderData->user_id ?? $order->user_id,
+                'slug' => $orderData->slug ?? $order->slug, // Update slug if provided in DTO
                 'total_amount' => $orderData->total_amount ?? $order->total_amount,
                 'status' => $orderData->status ?? $order->status,
                 'shipping_address' => $orderData->shipping_address ?? $order->shipping_address,

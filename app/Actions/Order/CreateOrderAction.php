@@ -7,6 +7,7 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use Illuminate\Support\Facades\DB;
 use Lorisleiva\Actions\Concerns\AsAction;
+// use Illuminate\Support\Str; // Remove this line
 
 class CreateOrderAction
 {
@@ -15,6 +16,7 @@ class CreateOrderAction
     public function handle(OrderData $orderData): Order
     {
         return DB::transaction(function () use ($orderData) {
+
             $order = Order::create([
                 'user_id' => $orderData->user_id,
                 'total_amount' => $orderData->total_amount,
