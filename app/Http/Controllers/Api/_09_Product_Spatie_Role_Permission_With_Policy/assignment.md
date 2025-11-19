@@ -14,7 +14,7 @@ This assignment focuses on refactoring the authorization logic from direct `Auth
 2.  **Register `ProductPolicy`:**
     *   Register the `ProductPolicy` in `App\Providers\AuthServiceProvider.php` by mapping the `App\Models\Product` model to its `ProductPolicy`.
 
-3.  **Create `ProductController` with Policies:**
+3.  **Create `ProductController` for Service Layer:**
     *   Copy the `ProductController.php` from `_08_Product_Spatie_Role_Permission` to this new directory: `app/Http/Controllers/Api/_09_Product_Spatie_Role_Permission_With_Policy`.
     *   Refactor the controller methods to use Laravel's authorization features (e.g., `$this->authorize()` helper or `Gate::authorize()`).
     *   For methods dealing with a specific `Product` instance (`view`, `update`, `delete`), pass the `Product` model to the `authorize` call (e.g., `$this->authorize('update', $product)`).

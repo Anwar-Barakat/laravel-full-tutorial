@@ -15,23 +15,19 @@ class RolePermissionSeeder extends Seeder
      */
     public function run(): void
     {
-        // Reset cached roles and permissions
         app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
 
-        // Create permissions if they don't exist
         $viewProducts = Permission::firstOrCreate(['name' => 'view products']);
         $createProducts = Permission::firstOrCreate(['name' => 'create products']);
         $editProducts = Permission::firstOrCreate(['name' => 'edit products']);
         $deleteProducts = Permission::firstOrCreate(['name' => 'delete products']);
 
-        // Create roles if they don't exist and assign permissions
         $adminRole = Role::firstOrCreate(['name' => 'admin']);
         $adminRole->givePermissionTo([$viewProducts, $createProducts, $editProducts, $deleteProducts]);
 
         $userRole = Role::firstOrCreate(['name' => 'user']);
         $userRole->givePermissionTo($viewProducts);
 
-        // Create a default admin user if they don't exist and assign the admin role
         $adminUser = User::firstOrCreate(
             ['email' => 'admin@example.com'],
             [
@@ -41,7 +37,6 @@ class RolePermissionSeeder extends Seeder
         );
         $adminUser->assignRole($adminRole);
 
-        // Create a default regular user if they don't exist and assign the user role
         $regularUser = User::firstOrCreate(
             ['email' => 'user@example.com'],
             [

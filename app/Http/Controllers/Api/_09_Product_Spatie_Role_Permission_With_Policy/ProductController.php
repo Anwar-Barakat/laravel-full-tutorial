@@ -13,7 +13,7 @@ use Spatie\QueryBuilder\AllowedFilter;
 use App\Http\Resources\ProductResource;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\Auth; // Still useful for general user info if needed elsewhere
+use Illuminate\Support\Facades\Auth;
 
 class ProductController extends Controller
 {

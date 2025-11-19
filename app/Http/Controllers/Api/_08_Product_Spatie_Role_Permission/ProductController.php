@@ -13,7 +13,7 @@ use Spatie\QueryBuilder\AllowedFilter;
 use App\Http\Resources\ProductResource;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\Auth; // For accessing the authenticated user
+use Illuminate\Support\Facades\Auth;
 
 class ProductController extends Controller
 {
@@ -21,7 +21,6 @@ class ProductController extends Controller
 
     public function index(Request $request)
     {
-        // Check for permission to view products
         if (Auth::check() && !Auth::user()->can('view products')) {
             return $this->errorResponse('Unauthorized to view products.', 403);
         }
@@ -44,7 +43,6 @@ class ProductController extends Controller
 
     public function store(StoreProductRequest $request)
     {
-        // Check for permission to create products
         if (Auth::check() && !Auth::user()->can('create products')) {
             return $this->errorResponse('Unauthorized to create products.', 403);
         }
@@ -78,7 +76,6 @@ class ProductController extends Controller
 
     public function show(string $id)
     {
-        // Check for permission to view products
         if (Auth::check() && !Auth::user()->can('view products')) {
             return $this->errorResponse('Unauthorized to view products.', 403);
         }
@@ -94,7 +91,6 @@ class ProductController extends Controller
 
     public function update(UpdateProductRequest $request, string $id)
     {
-        // Check for permission to edit products
         if (Auth::check() && !Auth::user()->can('edit products')) {
             return $this->errorResponse('Unauthorized to edit products.', 403);
         }
@@ -144,7 +140,6 @@ class ProductController extends Controller
 
     public function destroy(string $id)
     {
-        // Check for permission to delete products
         if (Auth::check() && !Auth::user()->can('delete products')) {
             return $this->errorResponse('Unauthorized to delete products.', 403);
         }
