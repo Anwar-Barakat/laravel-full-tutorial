@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\Api\_04_ApiResponse_Refactor;
+namespace App\Http\Controllers\Api\_04_Product_ApiResponse_Refactor;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;

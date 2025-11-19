@@ -12,8 +12,8 @@ use App\Http\Controllers\Api\_02_Product_Crud_With_Filter\ProductController as P
 // _03_Product_Crud_With_Resource
 use App\Http\Controllers\Api\_03_Product_Crud_With_Resource\ProductController as ProductControllerV3;
 
-// _04_ApiResponse_Refactor
-use App\Http\Controllers\Api\_04_ApiResponse_Refactor\ProductController as ProductControllerV4;
+// _04_Product_ApiResponse_Refactor
+use App\Http\Controllers\Api\_04_Product_ApiResponse_Refactor\ProductController as ProductControllerV4;
 
 // _05_Product_Review_Polymorphic
 use App\Http\Controllers\Api\_05_Product_Review_Polymorphic\ReviewController;
@@ -46,7 +46,7 @@ use App\Http\Controllers\Api\_11_Product_Service_Spatie_Data\ProductController a
 // _03_Product_Crud_With_Resource
 // Route::apiResource('products', ProductControllerV3::class);
 
-// _04_ApiResponse_Refactor
+// _04_Product_ApiResponse_Refactor
 // Route::apiResource('products', ProductControllerV4::class);
 
 // _05_Product_Review_Polymorphic
