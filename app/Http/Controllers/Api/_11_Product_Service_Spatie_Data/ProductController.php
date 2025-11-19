@@ -1,15 +1,14 @@
 <?php
 
-namespace App\Http\Controllers\Api\_10_Product_Service_Layer;
+namespace App\Http\Controllers\Api\_11_Product_Service_Spatie_Data;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
-use App\Http\Requests\Api\Product\StoreProductRequest;
-use App\Http\Requests\Api\Product\UpdateProductRequest;
 use App\Models\Product;
 use App\Http\Traits\ApiResponseTrait;
 use App\Http\Resources\ProductResource;
-use App\Services\_10_Product_Service_Layer\ProductService;
+use App\Services\_11_Product_Service_Spatie_Data\ProductService;
+use App\Data\ProductData;
 
 class ProductController extends Controller
 {
@@ -31,17 +30,11 @@ class ProductController extends Controller
         return $this->successResponse(ProductResource::collection($products), 'Products retrieved successfully.');
     }
 
-    public function store(StoreProductRequest $request)
+    public function store(ProductData $productData)
     {
         $this->authorize('create', Product::class);
 
-        $product = $this->productService->createProduct(
-            $request->except(['image', 'main_image', 'gallery_images', 'tags']),
-            $request->file('image'),
-            $request->file('main_image'),
-            $request->file('gallery_images'),
-            $request->input('tags')
-        );
+        $product = $this->productService->createProduct($productData);
 
         return $this->successResponse(new ProductResource($product), 'Product created successfully.', 201);
     }
@@ -59,7 +52,7 @@ class ProductController extends Controller
         return $this->successResponse(new ProductResource($product), 'Product retrieved successfully.');
     }
 
-    public function update(UpdateProductRequest $request, string $id)
+    public function update(ProductData $productData, string $id)
     {
         $product = $this->productService->findProduct($id);
 
@@ -69,15 +62,7 @@ class ProductController extends Controller
 
         $this->authorize('update', $product);
 
-        $product = $this->productService->updateProduct(
-            $product,
-            $request->except(['image', 'main_image', 'gallery_images', 'tags', 'delete_gallery_images']),
-            $request->file('image'),
-            $request->file('main_image'),
-            $request->file('gallery_images'),
-            $request->has('tags') ? $request->input('tags') : null,
-            $request->has('delete_gallery_images') ? (array) $request->input('delete_gallery_images') : null
-        );
+        $product = $this->productService->updateProduct($product, $productData);
 
         return $this->successResponse(new ProductResource($product), 'Product updated successfully.');
     }

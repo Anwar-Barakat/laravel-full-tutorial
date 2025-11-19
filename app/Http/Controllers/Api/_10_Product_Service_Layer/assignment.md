@@ -15,13 +15,12 @@ This assignment focuses on refactoring the `ProductController` by extracting its
     *   The service methods should operate on `Product` models and should *not* directly handle HTTP requests or responses. They should receive validated data and return model instances or collections.
 
 3.  **Create `ProductController` for Service Layer:**
-    *   Copy the `ProductController.php` from `_09_Product_Spatie_Role_Permission_With_Policy` to this new directory: `app/Http/Controllers/Api/_10_Product_Service_Layer`.
-    *   Refactor the new `ProductController` to be "thin":
-        *   Inject an instance of `ProductService` into its constructor.
-        *   Each controller method should primarily delegate its logic to the corresponding `ProductService` method.
-        *   Authorization using Policies (`$this->authorize()`) should remain in the controller.
-        *   API response handling using `ApiResponseTrait` should remain in the controller.
-        *   Form Request validation should remain in the controller.
+    *   Copy the `ProductController.php` from `_09_Product_Spatie_Role_Permission_With_Policy` (or `_10_Product_Service_Layer`, but use `_09` for base policy for now to avoid re-implementing service injection as a new feature) to this new directory: `app/Http/Controllers/Api/_10_Product_Service_Layer`.
+    *   Inject an instance of `ProductService` into its constructor.
+    *   Each controller method should primarily delegate its logic to the corresponding `ProductService` method.
+    *   Authorization using Policies (`$this->authorize()`) should remain in the controller.
+    *   API response handling using `ApiResponseTrait` should remain in the controller.
+    *   Form Request validation should remain in the controller.
 
 4.  **Update `routes/api.php`:**
     *   Update `routes/api.php` to use the `ProductController` from this new directory, commenting out the previous `_09` version.

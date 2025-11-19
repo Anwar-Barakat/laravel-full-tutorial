@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Services;
+namespace App\Services\_10_Product_Service_Layer;
 
 use App\Models\Product;
 use App\Models\Category;
@@ -94,7 +94,7 @@ class ProductService
                 }
             }
 
-            if ($tags !== null) { // Check for null to distinguish between 'not present' and 'empty array'
+            if ($tags !== null) {
                 $product->tags()->sync($tags);
             }
 
@@ -108,7 +108,6 @@ class ProductService
             if ($product->image) {
                 Storage::disk('public')->delete($product->image);
             }
-            // Spatie Media Library automatically handles media deletion when the model is deleted.
             return $product->delete();
         });
     }
