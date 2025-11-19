@@ -1,0 +1,16 @@
+<?php
+
+namespace App\Actions\Order;
+
+use App\Models\Order;
+use Lorisleiva\Actions\Concerns\AsAction;
+
+class DeleteOrderAction
+{
+    use AsAction;
+
+    public function handle(Order $order): bool
+    {
+        return $order->delete();
+    }
+}
