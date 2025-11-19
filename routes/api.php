@@ -16,15 +16,16 @@ use Illuminate\Support\Facades\Route;
 // use App\Http\Controllers\Api\_04_ApiResponse_Refactor\ProductController as ProductResourceController;
 
 // _05_Product_Review_Polymorphic
-// _05_Product_Review_Polymorphic
-// use App\Http\Controllers\Api\_05_Product_Review_Polymorphic\ProductController as ProductResourceController; // Commented out
 // use App\Http\Controllers\Api\_05_Product_Review_Polymorphic\ReviewController;
 
 // _06_Product_Spatie_Media_Library
 // use App\Http\Controllers\Api\_06_Product_Spatie_Media_Library\ProductController as ProductControllerV6;
 
 // _07_Product_Form_Request_Handling
-use App\Http\Controllers\Api\_07_Product_Form_Request_Handling\ProductController;
+// use App\Http\Controllers\Api\_07_Product_Form_Request_Handling\ProductController;
+
+// _08_Product_Spatie_Role_Permission
+use App\Http\Controllers\Api\_08_Product_Spatie_Role_Permission\ProductController as ProductControllerV8;
 
 
 
@@ -47,4 +48,7 @@ use App\Http\Controllers\Api\_07_Product_Form_Request_Handling\ProductController
 // Route::apiResource('products', ProductControllerV6::class); // Commented out for _07_
 
 // _07_Product_Form_Request_Handling
-Route::apiResource('products', ProductController::class);
+// Route::apiResource('products', ProductController::class);
+
+// _08_Product_Spatie_Role_Permission
+Route::apiResource('products', ProductControllerV8::class);
