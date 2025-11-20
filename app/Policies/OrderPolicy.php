@@ -52,6 +52,14 @@ class OrderPolicy
     }
 
     /**
+     * Determine whether the user can export models.
+     */
+    public function export(User $user): bool
+    {
+        return $user->can('export orders');
+    }
+
+    /**
      * Determine whether the user can restore the model.
      */
     public function restore(User $user, Order $order): bool

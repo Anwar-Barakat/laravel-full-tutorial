@@ -39,11 +39,14 @@ use App\Http\Controllers\Api\_11_Product_Service_Layer_With_Spatie_DTO\ProductCo
 // _12_Product_Action_Layer_With_Spatie_DTO
 use App\Http\Controllers\Api\_12_Product_Action_Layer_With_Spatie_DTO\ProductController as ProductControllerV12;
 
+// _13_Product_Cache_RateLimit
+use App\Http\Controllers\Api\_13_Product_Cache_RateLimit\ProductController as ProductControllerV13;
+
 // _14_Order_CRUD
 use App\Http\Controllers\Api\_14_Order_CRUD\OrderController;
 
-// _13_Product_Cache_RateLimit
-use App\Http\Controllers\Api\_13_Product_Cache_RateLimit\ProductController as ProductControllerV13;
+// _15_Order_Export_Basic
+use App\Http\Controllers\Api\_15_Order_Export_Excel\OrderExportController;
 
 
 // _01_Product_Crud
@@ -87,8 +90,18 @@ use App\Http\Controllers\Api\_13_Product_Cache_RateLimit\ProductController as Pr
 //     Route::apiResource('products', ProductControllerV13::class);
 // });
 
-// _12_Product_Action_Layer_With_Spatie_DTO
-Route::apiResource('products', ProductControllerV12::class);
-
 // _14_Order_CRUD
-Route::apiResource('orders', OrderController::class);
+// Route::apiResource('orders', OrderController::class);
+
+// _15_Order_Export_Basic
+Route::prefix('orders/export')->group(function () {
+    Route::get('basic', [OrderExportController::class, 'exportBasic']);
+    Route::get('custom-query', [OrderExportController::class, 'exportCustomQuery']);
+    Route::get('styled', [OrderExportController::class, 'exportCustomizingOutput']);
+    Route::get('multi-sheet', [OrderExportController::class, 'exportMultipleSheets']);
+    Route::get('large', [OrderExportController::class, 'exportLargeData']);
+    Route::get('advanced', [OrderExportController::class, 'exportAdvancedFeatures']);
+    Route::get('with-events', [OrderExportController::class, 'exportWithEvents']);
+    Route::get('csv', [OrderExportController::class, 'exportCsv']);
+    Route::get('pdf', [OrderExportController::class, 'exportPdf']);
+});
