@@ -51,6 +51,9 @@ use App\Http\Controllers\Api\_15_Order_Export_Excel\OrderExportController;
 // _16_Order_Import_Excel
 use App\Http\Controllers\Api\_16_Order_Import_Excel\OrderImportController;
 
+// _17_Order_Export_Pdf
+use App\Http\Controllers\Api\_17_Order_Export_Pdf\OrderExportPdfController;
+
 
 // _01_Product_Crud
 // Route::apiResource('products', ProductControllerV1::class);
@@ -110,4 +113,8 @@ use App\Http\Controllers\Api\_16_Order_Import_Excel\OrderImportController;
 // });
 
 // _16_Order_Import_Excel
-Route::post('orders/import', [OrderImportController::class, 'import']);
+// Route::post('orders/import', [OrderImportController::class, 'import']);
+
+// _17_Order_Export_Pdf
+Route::get('orders/export/pdf-from-view', [OrderExportPdfController::class, 'exportPdfFromView']);
+Route::get('orders/export/direct-dompdf', [OrderExportPdfController::class, 'exportDirectPdf']);

@@ -29,8 +29,8 @@ class RolePermissionSeeder extends Seeder
         $createOrder = Permission::firstOrCreate(['name' => 'create-order']);
         $updateOrder = Permission::firstOrCreate(['name' => 'update-order']);
         $deleteOrder = Permission::firstOrCreate(['name' => 'delete-order']);
-        $exportOrders = Permission::firstOrCreate(['name' => 'export orders']); // Added for export functionality
-        $importOrders = Permission::firstOrCreate(['name' => 'import orders']); // Added for import functionality
+        $exportOrders = Permission::firstOrCreate(['name' => 'export orders']);
+        $importOrders = Permission::firstOrCreate(['name' => 'import orders']);
 
 
         $adminRole = Role::firstOrCreate(['name' => 'admin']);
