@@ -56,65 +56,99 @@ use App\Http\Controllers\Api\_17_Order_Export_Pdf\OrderExportPdfController;
 
 
 // _01_Product_Crud
-// Route::apiResource('products', ProductControllerV1::class);
+Route::prefix('v1')->group(function () {
+    Route::apiResource('products', ProductControllerV1::class);
+});
 
 // _02_Product_Crud_With_Filter
-// Route::apiResource('products', ProductControllerV2::class);
+Route::prefix('v2')->group(function () {
+    Route::apiResource('products', ProductControllerV2::class);
+});
 
 // _03_Product_Crud_With_Resource
-// Route::apiResource('products', ProductControllerV3::class);
+Route::prefix('v3')->group(function () {
+    Route::apiResource('products', ProductControllerV3::class);
+});
 
 // _04_Product_ApiResponse_Refactor
-// Route::apiResource('products', ProductControllerV4::class);
+Route::prefix('v4')->group(function () {
+    Route::apiResource('products', ProductControllerV4::class);
+});
 
 // _05_Product_Review_Polymorphic
-// Route::apiResource('products.reviews', ReviewController::class)->only(['index', 'store']);
+Route::prefix('v5')->group(function () {
+    Route::apiResource('products.reviews', ReviewController::class)->only(['index', 'store']);
+});
 
 // _06_Product_Spatie_Media_Library
-// Route::apiResource('products', ProductControllerV6::class);
+Route::prefix('v6')->group(function () {
+    Route::apiResource('products', ProductControllerV6::class);
+});
 
 // _07_Product_Form_Request_Handling
-// Route::apiResource('products', ProductControllerV7::class);
+Route::prefix('v7')->group(function () {
+    Route::apiResource('products', ProductControllerV7::class);
+});
 
 // _08_Product_Spatie_Role_Permission
-// Route::apiResource('products', ProductControllerV8::class);
+Route::prefix('v8')->group(function () {
+    Route::apiResource('products', ProductControllerV8::class);
+});
 
 // _09_Product_Spatie_Role_Permission_With_Policy
-// Route::apiResource('products', ProductControllerV9::class);
+Route::prefix('v9')->group(function () {
+    Route::apiResource('products', ProductControllerV9::class);
+});
 
 // _10_Product_Service_Layer
-// Route::apiResource('products', ProductControllerV10::class);
+Route::prefix('v10')->group(function () {
+    Route::apiResource('products', ProductControllerV10::class);
+});
 
 // _11_Product_Service_Layer_With_Spatie_DTO
-// Route::apiResource('products', ProductControllerV11::class);
+Route::prefix('v11')->group(function () {
+    Route::apiResource('products', ProductControllerV11::class);
+});
 
 // _12_Product_Action_Layer_With_Spatie_DTO
-// Route::apiResource('products', ProductControllerV12::class);
+Route::prefix('v12')->group(function () {
+    Route::apiResource('products', ProductControllerV12::class);
+});
 
 // _13_Product_Cache_RateLimit
-// Route::middleware('throttle:60,1')->group(function () {
-//     Route::apiResource('products', ProductControllerV13::class);
-// });
+Route::prefix('v13')->middleware('throttle:60,1')->group(function () {
+    Route::apiResource('products', ProductControllerV13::class);
+});
 
 // _14_Order_CRUD
-// Route::apiResource('orders', OrderController::class);
+Route::prefix('v14')->group(function () {
+    Route::apiResource('orders', OrderController::class);
+});
 
 // _15_Order_Export_Excel
-// Route::prefix('orders/export')->group(function () {
-//     Route::get('basic', [OrderExportController::class, 'exportBasic']);
-//     Route::get('custom-query', [OrderExportController::class, 'exportCustomQuery']);
-//     Route::get('styled', [OrderExportController::class, 'exportCustomizingOutput']);
-//     Route::get('multi-sheet', [OrderExportController::class, 'exportMultipleSheets']);
-//     Route::get('large', [OrderExportController::class, 'exportLargeData']);
-//     Route::get('advanced', [OrderExportController::class, 'exportAdvancedFeatures']);
-//     Route::get('with-events', [OrderExportController::class, 'exportWithEvents']);
-//     Route::get('csv', [OrderExportController::class, 'exportCsv']);
-//     Route::get('pdf', [OrderExportController::class, 'exportPdf']);
-// });
+Route::prefix('v15')->group(function () {
+    Route::prefix('orders-exports')->group(function () {
+        Route::get('basic', [OrderExportController::class, 'exportBasic']);
+        Route::get('custom-query', [OrderExportController::class, 'exportCustomQuery']);
+        Route::get('styled', [OrderExportController::class, 'exportCustomizingOutput']);
+        Route::get('multi-sheet', [OrderExportController::class, 'exportMultipleSheets']);
+        Route::get('large', [OrderExportController::class, 'exportLargeData']);
+        Route::get('advanced', [OrderExportController::class, 'exportAdvancedFeatures']);
+        Route::get('with-events', [OrderExportController::class, 'exportWithEvents']);
+        Route::get('csv', [OrderExportController::class, 'exportCsv']);
+        Route::get('pdf', [OrderExportController::class, 'exportPdf']);
+    });
+});
 
 // _16_Order_Import_Excel
-// Route::post('orders/import', [OrderImportController::class, 'import']);
+Route::prefix('v16')->group(function () {
+    Route::prefix('orders-imports')->group(function () {
+        Route::post('/', [OrderImportController::class, 'import']);
+    });
+});
 
 // _17_Order_Export_Pdf
-Route::get('orders/export/pdf-from-view', [OrderExportPdfController::class, 'exportPdfFromView']);
-Route::get('orders/export/direct-dompdf', [OrderExportPdfController::class, 'exportDirectPdf']);
+Route::prefix('v17')->group(function () {
+    Route::get('orders/export/pdf-from-view', [OrderExportPdfController::class, 'exportPdfFromView']);
+    Route::get('orders/export/direct-dompdf', [OrderExportPdfController::class, 'exportDirectPdf']);
+});
