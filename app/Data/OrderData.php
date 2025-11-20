@@ -24,15 +24,15 @@ class OrderData extends Data
     public static function rules(): array
     {
         return [
-            'user_id' => ['nullable', 'integer', 'exists:users,id'],
+            'user_id'           => ['nullable', 'integer', 'exists:users,id'],
             // 'slug' => ['nullable', 'string', 'unique:orders,slug'], // Remove slug validation
-            'total_amount' => ['required', 'numeric', 'min:0'],
-            'status' => ['nullable', Rule::enum(OrderStatusEnum::class)],
-            'shipping_address' => ['nullable', 'string'],
-            'billing_address' => ['nullable', 'string'],
-            'payment_method' => ['required', 'string'],
-            'order_items' => ['required', 'array', 'min:1'],
-            'order_items.*' => ['required', 'array'],
+            'total_amount'      => ['required', 'numeric', 'min:0'],
+            'status'            => ['nullable', Rule::enum(OrderStatusEnum::class)],
+            'shipping_address'  => ['nullable', 'string'],
+            'billing_address'   => ['nullable', 'string'],
+            'payment_method'    => ['required', 'string'],
+            'order_items'       => ['required', 'array', 'min:1'],
+            'order_items.*'     => ['required', 'array'],
         ];
     }
 }

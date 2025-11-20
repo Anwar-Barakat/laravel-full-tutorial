@@ -57,6 +57,11 @@ use App\Http\Controllers\Api\_17_Order_Export_Pdf\OrderExportPdfController;
 // _18_Order_CRUD_With_Notification
 use App\Http\Controllers\Api\_18_Order_CRUD_With_Notification\OrderNotificationController;
 
+// _19_Stripe_Checkout_Payments
+use App\Http\Controllers\Api\_19_Stripe_Checkout_Payments\OrderPaymentController;
+use App\Http\Controllers\Api\_19_Stripe_Checkout_Payments\StripeCheckoutController;
+use App\Http\Controllers\Api\_19_Stripe_Checkout_Payments\StripeWebhookController;
+
 
 // _01_Product_Crud
 Route::prefix('v1')->group(function () {
@@ -159,4 +164,11 @@ Route::prefix('v17')->group(function () {
 // _18_Order_CRUD_With_Notification
 Route::prefix('v18')->group(function () {
     Route::apiResource('orders-with-notifications', OrderNotificationController::class);
+});
+
+// _19_Stripe_Checkout_Payments
+Route::prefix('v19')->group(function () {
+    Route::post('orders', [OrderPaymentController::class, 'createOrder']);
+    Route::post('stripe/checkout-session', [StripeCheckoutController::class, 'createCheckoutSession']);
+    Route::post('stripe/webhook', [StripeWebhookController::class, 'handleWebhook']);
 });
