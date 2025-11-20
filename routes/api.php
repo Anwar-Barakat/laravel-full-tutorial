@@ -45,8 +45,11 @@ use App\Http\Controllers\Api\_13_Product_Cache_RateLimit\ProductController as Pr
 // _14_Order_CRUD
 use App\Http\Controllers\Api\_14_Order_CRUD\OrderController;
 
-// _15_Order_Export_Basic
+// _15_Order_Export_Excel
 use App\Http\Controllers\Api\_15_Order_Export_Excel\OrderExportController;
+
+// _16_Order_Import_Excel
+use App\Http\Controllers\Api\_16_Order_Import_Excel\OrderImportController;
 
 
 // _01_Product_Crud
@@ -93,15 +96,18 @@ use App\Http\Controllers\Api\_15_Order_Export_Excel\OrderExportController;
 // _14_Order_CRUD
 // Route::apiResource('orders', OrderController::class);
 
-// _15_Order_Export_Basic
-Route::prefix('orders/export')->group(function () {
-    Route::get('basic', [OrderExportController::class, 'exportBasic']);
-    Route::get('custom-query', [OrderExportController::class, 'exportCustomQuery']);
-    Route::get('styled', [OrderExportController::class, 'exportCustomizingOutput']);
-    Route::get('multi-sheet', [OrderExportController::class, 'exportMultipleSheets']);
-    Route::get('large', [OrderExportController::class, 'exportLargeData']);
-    Route::get('advanced', [OrderExportController::class, 'exportAdvancedFeatures']);
-    Route::get('with-events', [OrderExportController::class, 'exportWithEvents']);
-    Route::get('csv', [OrderExportController::class, 'exportCsv']);
-    Route::get('pdf', [OrderExportController::class, 'exportPdf']);
-});
+// _15_Order_Export_Excel
+// Route::prefix('orders/export')->group(function () {
+//     Route::get('basic', [OrderExportController::class, 'exportBasic']);
+//     Route::get('custom-query', [OrderExportController::class, 'exportCustomQuery']);
+//     Route::get('styled', [OrderExportController::class, 'exportCustomizingOutput']);
+//     Route::get('multi-sheet', [OrderExportController::class, 'exportMultipleSheets']);
+//     Route::get('large', [OrderExportController::class, 'exportLargeData']);
+//     Route::get('advanced', [OrderExportController::class, 'exportAdvancedFeatures']);
+//     Route::get('with-events', [OrderExportController::class, 'exportWithEvents']);
+//     Route::get('csv', [OrderExportController::class, 'exportCsv']);
+//     Route::get('pdf', [OrderExportController::class, 'exportPdf']);
+// });
+
+// _16_Order_Import_Excel
+Route::post('orders/import', [OrderImportController::class, 'import']);
