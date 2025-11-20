@@ -37,7 +37,10 @@ use App\Http\Controllers\Api\_10_Product_Service_Layer\ProductController as Prod
 use App\Http\Controllers\Api\_11_Product_Service_Layer_With_Spatie_DTO\ProductController as ProductControllerV11;
 
 // _12_Product_Action_Layer_With_Spatie_DTO
-// use App\Http\Controllers\Api\_12_Product_Action_Layer_With_Spatie_DTO\ProductController as ProductControllerV12;
+use App\Http\Controllers\Api\_12_Product_Action_Layer_With_Spatie_DTO\ProductController as ProductControllerV12;
+
+// _14_Order_CRUD
+use App\Http\Controllers\Api\_14_Order_CRUD\OrderController;
 
 // _13_Product_Cache_RateLimit
 use App\Http\Controllers\Api\_13_Product_Cache_RateLimit\ProductController as ProductControllerV13;
@@ -80,6 +83,12 @@ use App\Http\Controllers\Api\_13_Product_Cache_RateLimit\ProductController as Pr
 // Route::apiResource('products', ProductControllerV12::class);
 
 // _13_Product_Cache_RateLimit
-Route::middleware('throttle:60,1')->group(function () {
-    Route::apiResource('products', ProductControllerV13::class);
-});
+// Route::middleware('throttle:60,1')->group(function () {
+//     Route::apiResource('products', ProductControllerV13::class);
+// });
+
+// _12_Product_Action_Layer_With_Spatie_DTO
+Route::apiResource('products', ProductControllerV12::class);
+
+// _14_Order_CRUD
+Route::apiResource('orders', OrderController::class);
