@@ -54,6 +54,9 @@ use App\Http\Controllers\Api\_16_Order_Import_Excel\OrderImportController;
 // _17_Order_Export_Pdf
 use App\Http\Controllers\Api\_17_Order_Export_Pdf\OrderExportPdfController;
 
+// _18_Order_CRUD_With_Notification
+use App\Http\Controllers\Api\_18_Order_CRUD_With_Notification\OrderNotificationController;
+
 
 // _01_Product_Crud
 Route::prefix('v1')->group(function () {
@@ -151,4 +154,9 @@ Route::prefix('v16')->group(function () {
 Route::prefix('v17')->group(function () {
     Route::get('orders/export/pdf-from-view', [OrderExportPdfController::class, 'exportPdfFromView']);
     Route::get('orders/export/direct-dompdf', [OrderExportPdfController::class, 'exportDirectPdf']);
+});
+
+// _18_Order_CRUD_With_Notification
+Route::prefix('v18')->group(function () {
+    Route::apiResource('orders-with-notifications', OrderNotificationController::class);
 });
