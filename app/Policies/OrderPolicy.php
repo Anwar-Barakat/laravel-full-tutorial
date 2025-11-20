@@ -60,6 +60,15 @@ class OrderPolicy
     }
 
     /**
+     * Determine whether the user can import models.
+     */
+    public function import(User $user): bool
+    {
+        return $user->can('import orders');
+    }
+
+
+    /**
      * Determine whether the user can restore the model.
      */
     public function restore(User $user, Order $order): bool
