@@ -35,4 +35,8 @@ return [
         ],
     ],
 
+    'stripe' => [
+        'secret' => env('STRIPE_KEY'),
+        'key' => env('STRIPE_SECRET'),
+    ]
 ];
