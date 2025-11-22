@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\Api\_20_Order_With_Stripe_Payment_Intent;
+namespace App\Http\Controllers\Api\_20_Order_Stripe_Payment_Intent;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;

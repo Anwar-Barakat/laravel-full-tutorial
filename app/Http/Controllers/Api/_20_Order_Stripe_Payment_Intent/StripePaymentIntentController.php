@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\Api\_20_Order_With_Stripe_Payment_Intent;
+namespace App\Http\Controllers\Api\_20_Order_Stripe_Payment_Intent;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
@@ -57,7 +57,6 @@ class StripePaymentIntentController extends Controller
                 'payment_intent_id' => $paymentIntent->id,
                 'customer_id' => $stripeCustomer->id,
             ], 'Stripe Payment Intent created successfully.');
-
         } catch (Throwable $e) {
             Log::error("Stripe Payment Intent Creation Error: " . $e->getMessage(), ['trace' => $e->getTrace()]);
             return $this->errorResponse('Failed to create Stripe Payment Intent: ' . $e->getMessage(), 500);

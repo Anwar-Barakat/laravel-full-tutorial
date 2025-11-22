@@ -8,7 +8,7 @@ use App\Exports\Order\OrderExportFromView;
 use App\Models\Order;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
-use Barryvdh\DomPDF\Facade\Pdf; // Added
+use Barryvdh\DomPDF\Facade\Pdf;
 
 class OrderExportPdfController extends Controller
 {

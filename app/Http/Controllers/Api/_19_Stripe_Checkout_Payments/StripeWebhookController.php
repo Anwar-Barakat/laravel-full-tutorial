@@ -10,7 +10,7 @@ use App\Http\Traits\ApiResponseTrait;
 use Stripe\Webhook;
 use Stripe\Exception\SignatureVerificationException;
 use App\Enums\Order\OrderStatusEnum;
-use App\Enums\Payment\PaymentStatusEnum; // Added
+use App\Enums\Payment\PaymentStatusEnum;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -52,8 +52,8 @@ class StripeWebhookController extends Controller
                     }
 
                     $payment = Payment::where('stripe_checkout_session_id', $session->id)
-                                    ->where('order_id', $orderId)
-                                    ->firstOrFail();
+                        ->where('order_id', $orderId)
+                        ->firstOrFail();
 
                     $order = $payment->order;
 
@@ -71,7 +71,6 @@ class StripeWebhookController extends Controller
                     }
 
                     Log::info("Order {$order->id} and Payment {$payment->id} updated successfully to 'paid'.");
-
                 } catch (Throwable $e) {
                     Log::error("Error processing checkout.session.completed for session {$session->id}: " . $e->getMessage());
                     // Consider re-queueing this event or sending an alert for manual review

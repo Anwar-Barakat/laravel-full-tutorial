@@ -62,10 +62,10 @@ use App\Http\Controllers\Api\_19_Stripe_Checkout_Payments\OrderPaymentController
 use App\Http\Controllers\Api\_19_Stripe_Checkout_Payments\StripeCheckoutController;
 use App\Http\Controllers\Api\_19_Stripe_Checkout_Payments\StripeWebhookController;
 
-// _20_Order_With_Stripe_Payment_Intent
-use App\Http\Controllers\Api\_20_Order_With_Stripe_Payment_Intent\StripePaymentIntentController;
-use App\Http\Controllers\Api\_20_Order_With_Stripe_Payment_Intent\StripePaymentIntentWebhookController;
-use App\Http\Controllers\Api\_20_Order_With_Stripe_Payment_Intent\OrderPaymentIntentController;
+// _20_Order_Stripe_Payment_Intent
+use App\Http\Controllers\Api\_20_Order_Stripe_Payment_Intent\StripePaymentIntentController;
+use App\Http\Controllers\Api\_20_Order_Stripe_Payment_Intent\StripePaymentIntentWebhookController;
+use App\Http\Controllers\Api\_20_Order_Stripe_Payment_Intent\OrderPaymentIntentController;
 
 // _21_Order_Events_Listeners
 use App\Http\Controllers\Api\_21_Order_Events_Listeners\OrderEventController;
@@ -181,7 +181,7 @@ Route::prefix('v19')->group(function () {
 });
 Route::post('stripe/webhook', [StripeWebhookController::class, 'handleWebhook']);
 
-// _20_Order_With_Stripe_Payment_Intent
+// _20_Order_Stripe_Payment_Intent
 Route::prefix('v20')->group(function () {
     Route::post('orders', [OrderPaymentIntentController::class, 'createOrder']);
     Route::post('stripe/payment-intents', [StripePaymentIntentController::class, 'createPaymentIntent']);
