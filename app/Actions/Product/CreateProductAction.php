@@ -5,6 +5,7 @@ namespace App\Actions\Product;
 use App\Models\Product;
 use Illuminate\Support\Facades\DB;
 use App\Data\ProductData;
+use App\Jobs\SendNewProductNotification;
 use Illuminate\Http\UploadedFile;
 
 class CreateProductAction
