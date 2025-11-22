@@ -13,6 +13,7 @@ use Throwable;
 use App\Actions\Stripe\ProcessPaymentIntentSucceededAction;
 use App\Actions\Stripe\ProcessPaymentIntentFailedAction;
 use App\Actions\Stripe\ProcessPaymentIntentCanceledAction;
+use Symfony\Component\HttpFoundation\JsonResponse;
 
 class StripePaymentIntentWebhookController extends Controller
 {
