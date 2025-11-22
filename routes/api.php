@@ -71,6 +71,9 @@ use App\Http\Controllers\Api\_20_Order_Stripe_Payment_Intent\OrderPaymentIntentC
 use App\Http\Controllers\Api\_21_Order_Events_Listeners\OrderEventController;
 
 // _22_Product_Job_Queue
+use App\Http\Controllers\Api\_24_Authentication_With_Sanctum\AuthController;
+
+// _22_Product_Job_Queue
 use App\Http\Controllers\Api\_22_Product_Job_Queue\ProductController as ProductControllerV22;
 
 
@@ -135,7 +138,7 @@ Route::prefix('v12')->group(function () {
 });
 
 // _13_Product_Cache_RateLimit
-Route::prefix('v13')->middleware('throttle:60,1')->group(function () {
+Route::prefix('v13')->middleware(['throttle:60,1', 'auth:sanctum'])->group(function () {
     Route::apiResource('products', ProductControllerV13::class);
 });
 
@@ -200,4 +203,11 @@ Route::prefix('v21')->group(function () {
 // _22_Product_Job_Queue
 Route::prefix('v22')->group(function () {
     Route::apiResource('products', ProductControllerV22::class);
+});
+
+// _24_Authentication_With_Sanctum
+Route::prefix('v24')->group(function () {
+    Route::post('register', [AuthController::class, 'register']);
+    Route::post('login', [AuthController::class, 'login']);
+    Route::middleware('auth:sanctum')->post('logout', [AuthController::class, 'logout']);
 });
