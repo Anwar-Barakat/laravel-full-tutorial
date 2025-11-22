@@ -62,6 +62,11 @@ use App\Http\Controllers\Api\_19_Stripe_Checkout_Payments\OrderPaymentController
 use App\Http\Controllers\Api\_19_Stripe_Checkout_Payments\StripeCheckoutController;
 use App\Http\Controllers\Api\_19_Stripe_Checkout_Payments\StripeWebhookController;
 
+// _20_Order_With_Stripe_Payment_Intent
+use App\Http\Controllers\Api\_20_Order_With_Stripe_Payment_Intent\StripePaymentIntentController;
+use App\Http\Controllers\Api\_20_Order_With_Stripe_Payment_Intent\StripePaymentIntentWebhookController;
+use App\Http\Controllers\Api\_20_Order_With_Stripe_Payment_Intent\OrderPaymentIntentController;
+
 
 // _01_Product_Crud
 Route::prefix('v1')->group(function () {
@@ -172,3 +177,14 @@ Route::prefix('v19')->group(function () {
     Route::post('stripe/checkout-session', [StripeCheckoutController::class, 'createCheckoutSession']);
     Route::post('stripe/webhook', [StripeWebhookController::class, 'handleWebhook']);
 });
+
+// _20_Order_With_Stripe_Payment_Intent
+Route::prefix('v20')->group(function () {
+    Route::post('orders', [OrderPaymentIntentController::class, 'createOrder']);
+    Route::post('stripe/payment-intents', [StripePaymentIntentController::class, 'createPaymentIntent']);
+    Route::get('stripe/payment-intents/{paymentIntentId}', [StripePaymentIntentController::class, 'retrievePaymentIntent']);
+});
+
+// Webhook for Payment Intents (outside specific version prefix)
+Route::post('stripe/webhook/payment-intents', [StripePaymentIntentWebhookController::class, 'handleWebhook']);
+
