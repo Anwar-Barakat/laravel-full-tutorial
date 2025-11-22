@@ -1,11 +1,12 @@
-# Assignment 20: Implementing Stripe Payment Intents with Advanced Tracking
+# Assignment 20: Implementing Stripe Payment Intents with Advanced Tracking & SRP Refactoring
 
 ## Objective
 
-This assignment expands on the Stripe Payment Intents integration by incorporating detailed tracking of Stripe charges, balance transactions, and customer payment methods within the application's database. This provides a more comprehensive view of payment lifecycles, revenue, fees, and customer payment information.
+This assignment expands on the Stripe Payment Intents integration by incorporating detailed tracking of Stripe charges, balance transactions, and customer payment methods within the application's database. Additionally, it refactors the controller logic to adhere more strictly to the Single Responsibility Principle (SRP) by extracting complex operations into dedicated Action classes.
 
 ## Key Concepts Covered
 
+*   **Single Responsibility Principle (SRP)**: Breaking down complex tasks into smaller, focused classes.
 *   **Stripe API Integration**: Advanced usage of the `stripe/stripe-php` library for `PaymentIntent`, `Charge`, `BalanceTransaction`, `Customer`, and `PaymentMethod` objects.
 *   **Stripe Payment Intents**: Core object for managing payments.
 *   **Stripe Charges**: Understanding and tracking the actual financial transaction result of a Payment Intent.
@@ -48,32 +49,38 @@ This assignment expands on the Stripe Payment Intents integration by incorporati
         *   `available_on` (timestamp, nullable) - when funds become available.
     *   Update the `Payment` model's `$fillable` and `$casts` properties to include these new fields and add `belongsTo` relationships to the `Order` and `User` models.
 
-4.  **Update `StripePaymentIntentController` (`app/Http/Controllers/Api/_20_Order_With_Stripe_Payment_Intent/StripePaymentIntentController.php`)**
-    *   **Customer Management**:
-        *   Implement a `findOrCreateStripeCustomer(User $user)` helper method that:
-            *   Checks if the `User` has a `stripe_customer_id`.
-            *   If yes, retrieves the Stripe Customer.
-            *   If no or retrieval fails, creates a new `Stripe Customer` (`\Stripe\Customer::create()`) using the user's details.
-            *   Updates the `User` model with the `stripe_customer_id`.
-            *   Returns the `Stripe\Customer` object.
-        *   In `createPaymentIntent`, call this helper method and pass the obtained `stripe_customer_id` to `PaymentIntent::create()`.
-        *   Ensure the `Payment` record saves the `user_id`.
+4.  **Create Stripe-related Action Classes (`app/Actions/Stripe/`)**
+    *   **`FindOrCreateStripeCustomerAction.php`**:
+        *   Implements `execute(User $user)` method.
+        *   Encapsulates the logic to find or create a Stripe Customer for a given `User`, updating the `User` model's `stripe_customer_id` if necessary.
+        *   Returns the `Stripe\Customer` object.
+    *   **`CreatePaymentIntentAction.php`**:
+        *   Implements `execute(Order $order, Stripe\Customer $stripeCustomer)` method.
+        *   Encapsulates the logic to create or update a Stripe `PaymentIntent`, including managing the local `Payment` record.
+        *   Returns the `Stripe\PaymentIntent` object.
+    *   **`ProcessPaymentIntentSucceededAction.php`**:
+        *   Implements `execute(Stripe\PaymentIntent $paymentIntent)` method.
+        *   Encapsulates the logic to retrieve `Stripe\Charge` and `Stripe\BalanceTransaction` details.
+        *   Updates the local `Payment` record with all charge, balance, and payment method details.
+        *   Updates the `Order` status to `PROCESSING` if pending.
+    *   **`ProcessPaymentIntentFailedAction.php`**:
+        *   Implements `execute(Stripe\PaymentIntent $paymentIntent)` method.
+        *   Updates the local `Payment` record status to `FAILED`.
+    *   **`ProcessPaymentIntentCanceledAction.php`**:
+        *   Implements `execute(Stripe\PaymentIntent $paymentIntent)` method.
+        *   Updates the local `Payment` record status to `CANCELLED`.
 
-5.  **Update `StripePaymentIntentWebhookController` (`app/Http/Controllers/Api/_20_Order_With_Stripe_Payment_Intent/StripePaymentIntentWebhookController.php`)**
-    *   **`payment_intent.succeeded` event**:
-        *   After updating `Payment` and `Order` status, retrieve the associated `Stripe Charge` (`\Stripe\Charge::retrieve($paymentIntent->latest_charge)`).
-        *   Retrieve the `Stripe Balance Transaction` (`\Stripe\BalanceTransaction::retrieve($charge->balance_transaction)`).
-        *   Update the local `Payment` record with data from the `Charge` and `BalanceTransaction` objects:
-            *   `stripe_charge_id`, `amount_captured`, `currency_captured`, `payment_method_type`, `card_brand`, `card_last_four`.
-            *   `stripe_balance_transaction_id`, `net_amount`, `fees_amount`, `available_on`.
-    *   **New Webhook Events (for Payment Method Tracking - Optional)**:
-        *   Consider handling `payment_method.attached` or `payment_method.automatically_updated` webhooks if you want to explicitly store customer payment methods for future use (e.g., one-click checkout) in your `payment_methods` table. For this assignment, we primarily focus on capturing payment method details on the `Payment` record for the specific transaction.
+5.  **Update `StripePaymentIntentController` (`app/Http/Controllers/Api/_20_Order_With_Stripe_Payment_Intent/StripePaymentIntentController.php`)**
+    *   Inject `FindOrCreateStripeCustomerAction` and `CreatePaymentIntentAction` into the controller.
+    *   The `createPaymentIntent` method should now primarily orchestrate calls to these Action classes, reducing its internal logic.
+    *   The `retrievePaymentIntent` method remains as is.
 
-6.  **Update API Routes (`routes/api.php`)**
-    *   Add a `POST` route for `/api/v20/orders` pointing to `OrderPaymentIntentController@createOrder`.
-    *   Add a `POST` route for `/api/v20/stripe/payment-intents` pointing to `StripePaymentIntentController@createPaymentIntent`.
-    *   Add a `GET` route for `/api/v20/stripe/payment-intents/{paymentIntentId}` pointing to `StripePaymentIntentController@retrievePaymentIntent`.
-    *   Add a `POST` route for `/api/stripe/webhook/payment-intents` pointing to `StripePaymentIntentWebhookController@handleWebhook`. **Crucially, this webhook route should be excluded from CSRF protection and other session middleware.**
+6.  **Update `StripePaymentIntentWebhookController` (`app/Http/Controllers/Api/_20_Order_With_Stripe_Payment_Intent/StripePaymentIntentWebhookController.php`)**
+    *   Inject `ProcessPaymentIntentSucceededAction`, `ProcessPaymentIntentFailedAction`, and `ProcessPaymentIntentCanceledAction` into the controller.
+    *   The `handleWebhook` method's `switch` cases should now primarily orchestrate calls to these Action classes, reducing their internal logic.
+
+7.  **Update API Routes (`routes/api.php`)**
+    *   No changes needed to route definitions, but ensure the existing routes function correctly with the updated controllers and new Action classes.
 
 ## Verification
 
