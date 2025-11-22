@@ -5,7 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use App\Enums\Payment\PaymentStatusEnum; // Added
+use App\Enums\Payment\PaymentStatusEnum;
 
 class Payment extends Model
 {
@@ -18,11 +18,23 @@ class Payment extends Model
      */
     protected $fillable = [
         'order_id',
+        'user_id',
         'stripe_checkout_session_id',
+        'payment_intent_id',
+        'stripe_charge_id',
         'amount',
+        'amount_captured',
         'currency',
+        'currency_captured',
         'status',
-        'payment_method',
+        'payment_method', // deprecated, but keeping for now
+        'payment_method_type',
+        'card_brand',
+        'card_last_four',
+        'stripe_balance_transaction_id',
+        'net_amount',
+        'fees_amount',
+        'available_on',
         'metadata',
     ];
 
@@ -34,7 +46,11 @@ class Payment extends Model
     protected $casts = [
         'metadata' => 'array',
         'amount' => 'decimal:2',
-        'status' => PaymentStatusEnum::class, // Cast to enum
+        'amount_captured' => 'decimal:2',
+        'net_amount' => 'decimal:2',
+        'fees_amount' => 'decimal:2',
+        'status' => PaymentStatusEnum::class,
+        'available_on' => 'datetime',
     ];
 
     /**
@@ -43,5 +59,13 @@ class Payment extends Model
     public function order(): BelongsTo
     {
         return $this->belongsTo(Order::class);
+    }
+
+    /**
+     * Get the user that owns the Payment.
+     */
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
     }
 }

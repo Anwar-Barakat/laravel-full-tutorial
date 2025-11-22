@@ -17,6 +17,7 @@ return new class extends Migration
             $table->string('email')->unique();
             $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
+            $table->string('stripe_customer_id')->nullable()->unique(); // Added for Stripe Customer ID
             $table->rememberToken();
             $table->timestamps();
         });
