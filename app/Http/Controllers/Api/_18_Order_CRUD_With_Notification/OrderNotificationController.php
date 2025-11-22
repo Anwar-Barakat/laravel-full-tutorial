@@ -14,7 +14,7 @@ use App\Actions\Order\FindOrderAction;
 use App\Actions\Order\CreateOrderAction;
 use App\Actions\Order\UpdateOrderAction;
 use App\Actions\Order\DeleteOrderAction;
-use App\Notifications\OrderCreatedNotification; // Added
+use App\Notifications\Order\OrderCreatedNotification; // Added
 
 class OrderNotificationController extends Controller
 {
