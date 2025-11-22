@@ -6,36 +6,24 @@ use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
-use App\Models\Order; // Import Order model
-use Illuminate\Notifications\Messages\BroadcastMessage; // Import BroadcastMessage
+use App\Models\Order;
+use Illuminate\Notifications\Messages\BroadcastMessage;
 
 class OrderCreatedNotification extends Notification implements ShouldQueue
 {
     use Queueable;
 
-    public Order $order;
-
-    /**
-     * Create a new notification instance.
-     */
-    public function __construct(Order $order)
+    public function __construct(public Order $order)
     {
         $this->order = $order;
     }
 
-    /**
-     * Get the notification's delivery channels.
-     *
-     * @return array<int, string>
-     */
     public function via(object $notifiable): array
     {
-        return ['mail', 'database', 'broadcast']; // Example channels
+        return ['mail', 'database', 'broadcast'];
     }
 
-    /**
-     * Get the mail representation of the notification.
-     */
+
     public function toMail(object $notifiable): MailMessage
     {
         $url = url('/orders/' . $this->order->id);
@@ -49,9 +37,7 @@ class OrderCreatedNotification extends Notification implements ShouldQueue
             ->line('Thank you for using our application!');
     }
 
-    /**
-     * Get the array representation of the notification for database storage.
-     */
+
     public function toDatabase(object $notifiable): array
     {
         return [
@@ -61,9 +47,6 @@ class OrderCreatedNotification extends Notification implements ShouldQueue
         ];
     }
 
-    /**
-     * Get the broadcastable representation of the notification.
-     */
     public function toBroadcast(object $notifiable): BroadcastMessage
     {
         return new BroadcastMessage([
@@ -73,9 +56,6 @@ class OrderCreatedNotification extends Notification implements ShouldQueue
         ]);
     }
 
-    /**
-     * Get the array representation of the notification.
-     */
     public function toArray(object $notifiable): array
     {
         return [

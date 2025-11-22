@@ -70,6 +70,9 @@ use App\Http\Controllers\Api\_20_Order_Stripe_Payment_Intent\OrderPaymentIntentC
 // _21_Order_Events_Listeners
 use App\Http\Controllers\Api\_21_Order_Events_Listeners\OrderEventController;
 
+// _22_Product_Job_Queue
+use App\Http\Controllers\Api\_22_Product_Job_Queue\ProductController as ProductControllerV22;
+
 
 // _01_Product_Crud
 Route::prefix('v1')->group(function () {
@@ -192,4 +195,9 @@ Route::post('stripe/webhook/payment-intents', [StripePaymentIntentWebhookControl
 // _21_Order_Events_Listeners
 Route::prefix('v21')->group(function () {
     Route::post('orders', [OrderEventController::class, 'store']);
+});
+
+// _22_Product_Job_Queue
+Route::prefix('v22')->group(function () {
+    Route::apiResource('products', ProductControllerV22::class);
 });
