@@ -26,7 +26,7 @@ class OrderFactory extends Factory
         return [
             'user_id' => User::factory(),
             'total_amount' => $this->faker->randomFloat(2, 10, 1000),
-            'status' => OrderStatusEnum::random(),
+            'status' => $this->faker->randomElement(OrderStatusEnum::toArray()),
             'shipping_address' => $this->faker->address,
             'billing_address' => $this->faker->address,
             'payment_method' => $this->faker->randomElement(['Credit Card', 'PayPal', 'Bank Transfer']),

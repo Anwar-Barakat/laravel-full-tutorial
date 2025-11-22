@@ -13,6 +13,7 @@ class ProductResource extends JsonResource
             'name' => $this->name,
             'description' => $this->description,
             'price' => $this->price,
+            'stock' => $this->stock,
             'image' => $this->image ? asset($this->image) : null, // Use model's image attribute
             'media' => [
                 'image' => [
