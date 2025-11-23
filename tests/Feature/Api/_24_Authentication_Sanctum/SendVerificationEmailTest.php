@@ -3,13 +3,13 @@
 namespace Tests\Feature\Api\_24_Authentication_Sanctum;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Tests\TestCase;
-use App\Models\User;
-use Laravel\Sanctum\Sanctum;
+use Tests\Feature\Api\BaseUserApiTest;
+// Removed: use App\Models\User;
+// Removed: use Laravel\Sanctum\Sanctum;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Auth\Notifications\VerifyEmail;
 
-class SendVerificationEmailTest extends TestCase
+class SendVerificationEmailTest extends BaseUserApiTest
 {
     use RefreshDatabase;
 
@@ -17,8 +17,7 @@ class SendVerificationEmailTest extends TestCase
     {
         Notification::fake();
 
-        $user = User::factory()->create(['email_verified_at' => null]);
-        Sanctum::actingAs($user);
+        $user = $this->createAuthenticatedUser(['email_verified_at' => null]); // Using helper
 
         $response = $this->postJson('/api/v24/email/verify/send');
 
@@ -35,8 +34,7 @@ class SendVerificationEmailTest extends TestCase
     {
         Notification::fake();
 
-        $user = User::factory()->create(['email_verified_at' => now()]);
-        Sanctum::actingAs($user);
+        $user = $this->createAuthenticatedUser(['email_verified_at' => now()]); // Using helper
 
         $response = $this->postJson('/api/v24/email/verify/send');
 

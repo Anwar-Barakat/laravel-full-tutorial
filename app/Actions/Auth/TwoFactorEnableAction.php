@@ -4,7 +4,7 @@ namespace App\Actions\Auth;
 
 use App\Models\User;
 use PragmaRX\Google2FA\Google2FA;
-use Illuminate\Support\Collection; // Use Illuminate\Support\Collection
+use Illuminate\Support\Collection; 
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
@@ -48,7 +48,7 @@ class TwoFactorEnableAction
 
     protected function generateRecoveryCodes(): array
     {
-        return Collection::times(8, function () { // Use Collection
+        return Collection::times(8, function () {
             return $this->google2fa->generateSecretKey(16);
         })->all();
     }

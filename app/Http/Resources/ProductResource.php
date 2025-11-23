@@ -14,7 +14,7 @@ class ProductResource extends JsonResource
             'description' => $this->description,
             'price' => $this->price,
             'stock' => $this->stock,
-            'image' => $this->image ? asset($this->image) : null, // Use model's image attribute
+            'image' => $this->image ? asset($this->image) : null,
             'media' => [
                 'image' => [
                     'url' => $this->getFirstMediaUrl('main_image'),

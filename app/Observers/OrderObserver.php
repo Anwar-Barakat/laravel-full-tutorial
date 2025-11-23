@@ -4,7 +4,6 @@ namespace App\Observers;
 
 use App\Models\Order;
 use App\Enums\Order\OrderStatusEnum;
-// use Illuminate\Support\Str; // Remove this line
 
 class OrderObserver
 {

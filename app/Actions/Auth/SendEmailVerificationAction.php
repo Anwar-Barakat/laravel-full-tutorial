@@ -20,7 +20,6 @@ class SendEmailVerificationAction
         $user->notify(new VerifyEmailNotification());
 
         Log::info("Email verification notification sent to user: {$user->email}");
-        // Use Laravel's default verification message to match tests
         return ['status' => 'A fresh verification link has been sent to your email address.'];
     }
 }

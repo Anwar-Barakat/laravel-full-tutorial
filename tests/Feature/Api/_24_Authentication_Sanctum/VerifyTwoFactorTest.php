@@ -3,12 +3,12 @@
 namespace Tests\Feature\Api\_24_Authentication_Sanctum;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Tests\TestCase;
-use App\Models\User;
-use Laravel\Sanctum\Sanctum;
+use Tests\Feature\Api\BaseUserApiTest;
+// Removed: use App\Models\User;
+// Removed: use Laravel\Sanctum\Sanctum;
 use PragmaRX\Google2FA\Google2FA;
 
-class VerifyTwoFactorTest extends TestCase
+class VerifyTwoFactorTest extends BaseUserApiTest
 {
     use RefreshDatabase;
 
@@ -18,17 +18,16 @@ class VerifyTwoFactorTest extends TestCase
     {
         parent::setUp();
         $this->google2fa = new Google2FA();
-        // Ensure that the user factory creates verified users for these tests by default
-        User::factory()->state(['email_verified_at' => now()])->create();
+        // Removed: User::factory()->state(['email_verified_at' => now()])->create();
     }
 
     public function test_an_authenticated_and_verified_user_can_verify_their_two_factor_code()
     {
         $secret = $this->google2fa->generateSecretKey();
-        $user = User::factory()->create([
+        $user = $this->createAuthenticatedUser([
             'two_factor_secret' => encrypt($secret),
+            'email_verified_at' => now(), // Ensure user is verified
         ]);
-        Sanctum::actingAs($user);
 
         $validCode = $this->google2fa->getCurrentOtp($secret);
 
@@ -41,19 +40,15 @@ class VerifyTwoFactorTest extends TestCase
                 'status' => 'success',
                 'message' => 'Two-factor authentication code verified successfully.',
             ]);
-
-        // Optionally, assert that the session indicates 2FA has been passed
-        // This might depend on how your application uses the `password.confirm` or similar middleware
-        // For simplicity, we just check the response.
     }
 
     public function test_verification_fails_with_an_invalid_two_factor_code()
     {
         $secret = $this->google2fa->generateSecretKey();
-        $user = User::factory()->create([
+        $user = $this->createAuthenticatedUser([
             'two_factor_secret' => encrypt($secret),
+            'email_verified_at' => now(), // Ensure user is verified
         ]);
-        Sanctum::actingAs($user);
 
         $response = $this->postJson('/api/v24/two-factor/verify', [
             'code' => '000000', // Invalid code
@@ -65,8 +60,10 @@ class VerifyTwoFactorTest extends TestCase
 
     public function test_verification_fails_if_two_factor_is_not_enabled()
     {
-        $user = User::factory()->create(['two_factor_secret' => null]);
-        Sanctum::actingAs($user);
+        $user = $this->createAuthenticatedUser([
+            'two_factor_secret' => null,
+            'email_verified_at' => now(), // Ensure user is verified
+        ]);
 
         $response = $this->postJson('/api/v24/two-factor/verify', [
             'code' => '123456',
@@ -82,10 +79,10 @@ class VerifyTwoFactorTest extends TestCase
     public function test_verification_requires_code()
     {
         $secret = $this->google2fa->generateSecretKey();
-        $user = User::factory()->create([
+        $user = $this->createAuthenticatedUser([
             'two_factor_secret' => encrypt($secret),
+            'email_verified_at' => now(), // Ensure user is verified
         ]);
-        Sanctum::actingAs($user);
 
         $response = $this->postJson('/api/v24/two-factor/verify', []);
 
@@ -96,11 +93,10 @@ class VerifyTwoFactorTest extends TestCase
     public function test_verification_fails_if_user_is_not_verified()
     {
         $secret = $this->google2fa->generateSecretKey();
-        $user = User::factory()->create([
-            'email_verified_at' => null, // Not verified
+        $user = $this->createAuthenticatedUser([
             'two_factor_secret' => encrypt($secret),
+            'email_verified_at' => null, // User is not verified
         ]);
-        Sanctum::actingAs($user);
 
         $validCode = $this->google2fa->getCurrentOtp($secret);
 

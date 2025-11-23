@@ -59,12 +59,11 @@ class StripeWebhookController extends Controller
 
                     // Update Payment Status
                     $payment->update([
-                        'status' => PaymentStatusEnum::PAID(), // Use enum
+                        'status' => PaymentStatusEnum::PAID(),
                         'payment_method' => $session->payment_method_types[0] ?? 'unknown',
                         'metadata' => array_merge($payment->metadata ?? [], ['stripe_session_data' => $session->toArray()]),
                     ]);
 
-                    // Update Order Status (e.g., from pending to processing)
                     if ($order->status === OrderStatusEnum::PENDING) {
                         $order->status = OrderStatusEnum::PROCESSING;
                         $order->save();
@@ -73,7 +72,6 @@ class StripeWebhookController extends Controller
                     Log::info("Order {$order->id} and Payment {$payment->id} updated successfully to 'paid'.");
                 } catch (Throwable $e) {
                     Log::error("Error processing checkout.session.completed for session {$session->id}: " . $e->getMessage());
-                    // Consider re-queueing this event or sending an alert for manual review
                     return $this->errorResponse('Error processing event.', 500);
                 }
                 break;
@@ -81,7 +79,6 @@ class StripeWebhookController extends Controller
             case 'checkout.session.async_payment_succeeded':
                 $session = $event->data->object;
                 Log::info("Checkout Session Async Payment Succeeded: " . $session->id);
-                // Handle as needed, e.g., update payment status to 'processing'
                 $payment = Payment::where('stripe_checkout_session_id', $session->id)->first();
                 if ($payment && $payment->status !== PaymentStatusEnum::PAID()) {
                     $payment->update(['status' => PaymentStatusEnum::PAID()]);
@@ -91,14 +88,12 @@ class StripeWebhookController extends Controller
             case 'checkout.session.async_payment_failed':
                 $session = $event->data->object;
                 Log::warning("Checkout Session Async Payment Failed: " . $session->id);
-                // Handle as needed, e.g., update payment status to 'failed' or 'cancelled'
                 $payment = Payment::where('stripe_checkout_session_id', $session->id)->first();
                 if ($payment && $payment->status !== PaymentStatusEnum::FAILED()) {
                     $payment->update(['status' => PaymentStatusEnum::FAILED()]);
                 }
                 break;
 
-            // ... handle other event types
             default:
                 Log::info('Received unknown event type ' . $event->type);
                 break;

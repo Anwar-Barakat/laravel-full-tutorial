@@ -52,9 +52,9 @@ class StripeCheckoutController extends Controller // Renamed
                 ['order_id' => $order->id],
                 [
                     'amount' => $order->total_amount,
-                    'currency' => 'usd', // Assuming USD for now, or get from order/config
-                    'status' => PaymentStatusEnum::PENDING(), // Use enum
-                    'payment_method' => null, // Will be updated by webhook
+                    'currency' => 'usd',
+                    'status' => PaymentStatusEnum::PENDING(),
+                    'payment_method' => null, 
                 ]
             );
 

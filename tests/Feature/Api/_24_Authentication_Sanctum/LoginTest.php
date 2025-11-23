@@ -4,21 +4,19 @@ namespace Tests\Feature\Api\_24_Authentication_Sanctum;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\WithFaker;
-use Tests\TestCase;
-use App\Models\User;
+use Tests\Feature\Api\BaseUserApiTest;
+// Removed: use App\Models\User;
 use Illuminate\Support\Facades\Hash;
-use Laravel\Sanctum\Sanctum;
+// Removed: use Laravel\Sanctum\Sanctum;
 
-class LoginTest extends TestCase
+class LoginTest extends BaseUserApiTest
 {
     use RefreshDatabase, WithFaker;
 
     public function test_a_user_can_log_in_with_valid_credentials()
     {
         $password = 'password123';
-        $user = User::factory()->create([
-            'password' => Hash::make($password),
-        ]);
+        $user = $this->createPasswordedUser($password); // Using helper
 
         $loginData = [
             'email' => $user->email,
@@ -46,9 +44,7 @@ class LoginTest extends TestCase
     public function test_login_fails_with_invalid_credentials()
     {
         $password = 'password123';
-        User::factory()->create([
-            'password' => Hash::make($password),
-        ]);
+        $this->createPasswordedUser($password); // Using helper
 
         $loginData = [
             'email' => 'wrong@example.com',

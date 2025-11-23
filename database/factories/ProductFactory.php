@@ -15,7 +15,7 @@ class ProductFactory extends Factory
             'price' => $this->faker->randomFloat(2, 10, 1000),
             'stock' => $this->faker->numberBetween(0, 100),
             'image' => 'https://placehold.co/600x400/png',
-            'category_id' => \App\Models\Category::all()->random()->id,
+            'category_id' => \App\Models\Category::factory()->create()->id,
         ];
     }
 }

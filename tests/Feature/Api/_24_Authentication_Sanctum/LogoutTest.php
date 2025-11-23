@@ -3,18 +3,15 @@
 namespace Tests\Feature\Api\_24_Authentication_Sanctum;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Tests\TestCase;
-use App\Models\User;
-use Laravel\Sanctum\Sanctum;
+use Tests\Feature\Api\BaseUserApiTest;
 
-class LogoutTest extends TestCase
+class LogoutTest extends BaseUserApiTest
 {
     use RefreshDatabase;
 
     public function test_an_authenticated_user_can_log_out()
     {
-        $user = User::factory()->create();
-        Sanctum::actingAs($user, ['*']);
+        $user = $this->createAuthenticatedUser();
 
         $response = $this->postJson('/api/v24/logout');
 
