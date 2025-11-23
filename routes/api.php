@@ -71,7 +71,7 @@ use App\Http\Controllers\Api\_20_Order_Stripe_Payment_Intent\OrderPaymentIntentC
 use App\Http\Controllers\Api\_21_Order_Events_Listeners\OrderEventController;
 
 // _22_Product_Job_Queue
-use App\Http\Controllers\Api\_24_Authentication_With_Sanctum\AuthController;
+use App\Http\Controllers\Api\_24_Authentication_Sanctum\AuthController;
 
 // _22_Product_Job_Queue
 use App\Http\Controllers\Api\_22_Product_Job_Queue\ProductController as ProductControllerV22;
@@ -205,9 +205,34 @@ Route::prefix('v22')->group(function () {
     Route::apiResource('products', ProductControllerV22::class);
 });
 
-// _24_Authentication_With_Sanctum
+// _24_Authentication_Sanctum
 Route::prefix('v24')->group(function () {
     Route::post('register', [AuthController::class, 'register']);
     Route::post('login', [AuthController::class, 'login']);
     Route::middleware('auth:sanctum')->post('logout', [AuthController::class, 'logout']);
+
+    // Password Reset
+    Route::post('forgot-password', [AuthController::class, 'forgotPassword'])->name('password.email');
+    Route::post('reset-password', [AuthController::class, 'resetPassword'])->name('password.update');
+
+    // Email Verification
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::post('email/verify/send', [AuthController::class, 'sendVerificationEmail'])->name('verification.send');
+        // This route must be a GET request and protected by 'signed' middleware
+        Route::get('email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])
+            ->middleware(['signed', 'throttle:6,1'])
+            ->name('verification.verify');
+    });
+
+    // Two-Factor Authentication
+    Route::middleware(['auth:sanctum', 'verified'])->group(function () { // 'verified' middleware ensures email is verified
+        Route::post('two-factor/enable', [AuthController::class, 'enableTwoFactor']);
+        Route::post('two-factor/disable', [AuthController::class, 'disableTwoFactor']);
+        Route::post('two-factor/verify', [AuthController::class, 'verifyTwoFactor']);
+        Route::get('two-factor/recovery-codes', [AuthController::class, 'getRecoveryCodes']);
+    });
+
+    // Google Socialite
+    Route::get('google/redirect', [AuthController::class, 'redirectToGoogle']);
+    Route::get('google/callback', [AuthController::class, 'handleGoogleCallback']);
 });
