@@ -12,7 +12,7 @@ class LoginUserAction
     {
         if (!Auth::attempt(['email' => $data->email, 'password' => $data->password])) {
             throw ValidationException::withMessages([
-                'email' => ['The provided credentials do not match our records.'],
+                'email' => ['These credentials do not match our records.'],
             ]);
         }
 
