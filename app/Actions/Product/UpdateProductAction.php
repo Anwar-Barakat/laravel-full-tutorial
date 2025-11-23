@@ -5,7 +5,7 @@ namespace App\Actions\Product;
 use App\Models\Product;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use App\Data\ProductData;
+use App\Data\Product\ProductData;
 use Illuminate\Http\UploadedFile;
 
 class UpdateProductAction

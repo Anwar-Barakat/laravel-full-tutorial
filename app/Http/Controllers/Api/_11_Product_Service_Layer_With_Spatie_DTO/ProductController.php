@@ -8,7 +8,7 @@ use App\Models\Product;
 use App\Http\Traits\ApiResponseTrait;
 use App\Http\Resources\ProductResource;
 use App\Services\_11_Product_Service_Layer_With_Spatie_DTO\ProductService;
-use App\Data\ProductData;
+use App\Data\Product\ProductData;
 
 class ProductController extends Controller
 {

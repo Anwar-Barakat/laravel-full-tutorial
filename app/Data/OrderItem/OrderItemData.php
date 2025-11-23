@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Data;
+namespace App\Data\OrderItem;
 
 use Spatie\LaravelData\Data;
 

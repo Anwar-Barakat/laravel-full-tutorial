@@ -7,7 +7,7 @@ use Illuminate\Http\Request;
 use App\Models\Product;
 use App\Http\Traits\ApiResponseTrait;
 use App\Http\Resources\ProductResource;
-use App\Data\ProductData;
+use App\Data\Product\ProductData;
 
 // Import Actions
 use App\Actions\Product\GetAllProductsAction;
