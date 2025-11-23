@@ -3,36 +3,32 @@
 namespace Tests\Feature\Api\_24_Authentication_Sanctum;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Tests\TestCase;
-use App\Models\User;
-use Laravel\Sanctum\Sanctum;
+use Tests\Feature\Api\BaseUserApiTest;
+// Removed: use App\Models\User;
+// Removed: use Laravel\Sanctum\Sanctum;
 use PragmaRX\Google2FA\Google2FA;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str; // Added for Str::random
 
-class GetRecoveryCodesTest extends TestCase
+class GetRecoveryCodesTest extends BaseUserApiTest
 {
     use RefreshDatabase;
 
-    protected function setUp(): void
-    {
-        parent::setUp();
-        // Ensure that the user factory creates verified users for these tests by default
-        User::factory()->state(['email_verified_at' => now()])->create();
-    }
+    // Removed setUp method as users will be created explicitly in each test
 
     public function test_an_authenticated_and_verified_user_can_retrieve_their_two_factor_recovery_codes()
     {
         $google2fa = new Google2FA();
         // Generate recovery codes locally for tests
         $recoveryCodes = collect(range(1, 8))->map(function () {
-            return \Illuminate\Support\Str::random(10);
+            return Str::random(10);
         })->all();
-        $user = User::factory()->create([
+        $user = $this->createAuthenticatedUser([
             'password' => Hash::make('password'),
             'two_factor_secret' => encrypt($google2fa->generateSecretKey()),
             'two_factor_recovery_codes' => encrypt(json_encode($recoveryCodes)),
+            'email_verified_at' => now(), // Ensure user is verified
         ]);
-        Sanctum::actingAs($user);
 
         $response = $this->getJson('/api/v24/two-factor/recovery-codes?password=password');
 
@@ -55,8 +51,10 @@ class GetRecoveryCodesTest extends TestCase
 
     public function test_retrieving_recovery_codes_fails_if_two_factor_is_not_enabled()
     {
-        $user = User::factory()->create(['two_factor_secret' => null]);
-        Sanctum::actingAs($user);
+        $user = $this->createAuthenticatedUser([
+            'email_verified_at' => now(), // Ensure user is verified
+            'two_factor_secret' => null,
+        ]);
 
         $response = $this->getJson('/api/v24/two-factor/recovery-codes');
 
@@ -70,11 +68,12 @@ class GetRecoveryCodesTest extends TestCase
     public function test_retrieving_recovery_codes_requires_password()
     {
         $google2fa = new Google2FA();
-        $user = User::factory()->create([
+        $user = $this->createAuthenticatedUser([
+            'password' => Hash::make('password'),
             'two_factor_secret' => encrypt($google2fa->generateSecretKey()),
-            'two_factor_recovery_codes' => encrypt(json_encode(collect(range(1, 8))->map(fn() => \Illuminate\Support\Str::random(10))->all())),
+            'two_factor_recovery_codes' => encrypt(json_encode(collect(range(1, 8))->map(fn() => Str::random(10))->all())),
+            'email_verified_at' => now(), // Ensure user is verified
         ]);
-        Sanctum::actingAs($user);
 
         $response = $this->getJson('/api/v24/two-factor/recovery-codes'); // No password provided
 
@@ -85,12 +84,12 @@ class GetRecoveryCodesTest extends TestCase
     public function test_retrieving_recovery_codes_fails_with_incorrect_password()
     {
         $google2fa = new Google2FA();
-        $user = User::factory()->create([
+        $user = $this->createAuthenticatedUser([
             'password' => Hash::make('password'),
             'two_factor_secret' => encrypt($google2fa->generateSecretKey()),
-            'two_factor_recovery_codes' => encrypt(json_encode(collect(range(1, 8))->map(fn() => \Illuminate\Support\Str::random(10))->all())),
+            'two_factor_recovery_codes' => encrypt(json_encode(collect(range(1, 8))->map(fn() => Str::random(10))->all())),
+            'email_verified_at' => now(), // Ensure user is verified
         ]);
-        Sanctum::actingAs($user);
 
         $response = $this->getJson('/api/v24/two-factor/recovery-codes?password=incorrect-password');
 
@@ -101,13 +100,12 @@ class GetRecoveryCodesTest extends TestCase
     public function test_retrieving_recovery_codes_fails_if_user_is_not_verified()
     {
         $google2fa = new Google2FA();
-        $user = User::factory()->create([
-            'email_verified_at' => null, // Not verified
+        $user = $this->createAuthenticatedUser([
             'password' => Hash::make('password'),
+            'email_verified_at' => null, // User is not verified
             'two_factor_secret' => encrypt($google2fa->generateSecretKey()),
-            'two_factor_recovery_codes' => encrypt(json_encode(collect(range(1, 8))->map(fn() => \Illuminate\Support\Str::random(10))->all())),
+            'two_factor_recovery_codes' => encrypt(json_encode(collect(range(1, 8))->map(fn() => Str::random(10))->all())),
         ]);
-        Sanctum::actingAs($user);
 
         $response = $this->getJson('/api/v24/two-factor/recovery-codes?password=password');
 

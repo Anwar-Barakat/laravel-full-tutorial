@@ -78,7 +78,7 @@ use App\Http\Controllers\Api\_22_Product_Job_Queue\ProductController as ProductC
 
 
 // _01_Product_Crud
-Route::prefix('v1')->group(function () {
+Route::prefix('v1')->middleware(['auth:sanctum'])->group(function () {
     Route::apiResource('products', ProductControllerV1::class);
 });
 

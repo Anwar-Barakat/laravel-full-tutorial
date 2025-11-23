@@ -4,13 +4,14 @@ namespace Tests\Feature\Api\_24_Authentication_Sanctum;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\WithFaker;
-use Tests\TestCase;
-use App\Models\User;
+use Tests\Feature\Api\BaseUserApiTest;
+// Removed: use App\Models\User;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Auth\Events\Registered;
+use App\Models\User; // Re-added
 
-class RegisterTest extends TestCase
+class RegisterTest extends BaseUserApiTest
 {
     use RefreshDatabase, WithFaker;
 
@@ -66,7 +67,7 @@ class RegisterTest extends TestCase
 
     public function test_registration_requires_a_unique_email()
     {
-        User::factory()->create(['email' => 'test@example.com']);
+        $this->createUser(['email' => 'test@example.com']); // Using helper
 
         $password = $this->faker->password(8);
         $userData = [

@@ -2,12 +2,12 @@
 
 namespace Tests\Feature\Api\_24_Authentication_Sanctum;
 
-use Tests\TestCase;
+use Tests\Feature\Api\BaseUserApiTest; // Updated
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Socialite\Facades\Socialite;
 use Mockery;
 
-class GoogleRedirectTest extends TestCase
+class GoogleRedirectTest extends BaseUserApiTest
 {
     use RefreshDatabase;
 

@@ -3,27 +3,24 @@
 namespace Tests\Feature\Api\_24_Authentication_Sanctum;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Tests\TestCase;
-use App\Models\User;
-use Laravel\Sanctum\Sanctum;
-use Illuminate\Support\Facades\Hash;
+use Tests\Feature\Api\BaseUserApiTest;
+// Removed: use App\Models\User;
+// Removed: use Laravel\Sanctum\Sanctum;
+use Illuminate\Support\Facades\Hash; // Keep Hash for explicit password hashing where needed
 use PragmaRX\Google2FA\Google2FA;
 
-class EnableTwoFactorTest extends TestCase
+class EnableTwoFactorTest extends BaseUserApiTest
 {
     use RefreshDatabase;
 
-    protected function setUp(): void
-    {
-        parent::setUp();
-        // Ensure that the user factory creates verified users for these tests by default
-        User::factory()->state(['email_verified_at' => now()])->create();
-    }
+    // Removed setUp method as users will be created explicitly in each test
 
     public function test_an_authenticated_and_verified_user_can_enable_two_factor_authentication()
     {
-        $user = User::factory()->create(['password' => Hash::make('password')]);
-        Sanctum::actingAs($user);
+        $user = $this->createAuthenticatedUser([
+            'password' => Hash::make('password'),
+            'email_verified_at' => now(), // Ensure user is verified
+        ]);
 
         $response = $this->postJson('/api/v24/two-factor/enable', [
             'password' => 'password',
@@ -53,11 +50,11 @@ class EnableTwoFactorTest extends TestCase
     public function test_an_authenticated_and_verified_user_cannot_enable_two_factor_if_already_enabled()
     {
         $google2fa = new Google2FA();
-        $user = User::factory()->create([
+        $user = $this->createAuthenticatedUser([
             'password' => Hash::make('password'),
             'two_factor_secret' => $google2fa->generateSecretKey(),
+            'email_verified_at' => now(), // Ensure user is verified
         ]);
-        Sanctum::actingAs($user);
 
         $response = $this->postJson('/api/v24/two-factor/enable', [
             'password' => 'password',
@@ -72,8 +69,10 @@ class EnableTwoFactorTest extends TestCase
 
     public function test_enabling_two_factor_requires_correct_password()
     {
-        $user = User::factory()->create(['password' => Hash::make('password')]);
-        Sanctum::actingAs($user);
+        $user = $this->createAuthenticatedUser([
+            'password' => Hash::make('password'),
+            'email_verified_at' => now(), // Ensure user is verified
+        ]);
 
         $response = $this->postJson('/api/v24/two-factor/enable', [
             'password' => 'wrong-password',
@@ -85,8 +84,10 @@ class EnableTwoFactorTest extends TestCase
 
     public function test_enabling_two_factor_fails_if_user_is_not_verified()
     {
-        $user = User::factory()->create(['email_verified_at' => null, 'password' => Hash::make('password')]);
-        Sanctum::actingAs($user);
+        $user = $this->createAuthenticatedUser([
+            'password' => Hash::make('password'),
+            'email_verified_at' => null, // User is not verified
+        ]);
 
         $response = $this->postJson('/api/v24/two-factor/enable', [
             'password' => 'password',

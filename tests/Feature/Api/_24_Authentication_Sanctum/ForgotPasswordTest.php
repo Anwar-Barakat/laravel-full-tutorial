@@ -4,13 +4,13 @@ namespace Tests\Feature\Api\_24_Authentication_Sanctum;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\WithFaker;
-use Tests\TestCase;
-use App\Models\User;
+use Tests\Feature\Api\BaseUserApiTest;
+// Removed: use App\Models\User;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\Notification;
 use App\Notifications\Auth\ResetPasswordEmailNotification;
 
-class ForgotPasswordTest extends TestCase
+class ForgotPasswordTest extends BaseUserApiTest
 {
     use RefreshDatabase, WithFaker;
 
@@ -18,7 +18,7 @@ class ForgotPasswordTest extends TestCase
     {
         Notification::fake();
 
-        $user = User::factory()->create();
+        $user = $this->createUser(); // Using helper
 
         $response = $this->postJson('/api/v24/forgot-password', ['email' => $user->email]);
 

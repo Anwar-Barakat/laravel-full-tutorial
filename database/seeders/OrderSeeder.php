@@ -23,7 +23,7 @@ class OrderSeeder extends Seeder
 
             foreach ($products as $product) {
                 $quantity = rand(1, 3);
-                $price = $product->price; // Use product's current price
+                $price = $product->price;
                 $totalAmount += ($quantity * $price);
 
                 OrderItem::factory()->create([

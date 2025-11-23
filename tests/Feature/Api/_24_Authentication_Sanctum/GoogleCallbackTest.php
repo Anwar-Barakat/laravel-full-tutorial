@@ -3,13 +3,13 @@
 namespace Tests\Feature\Api\_24_Authentication_Sanctum;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Tests\TestCase;
+use Tests\Feature\Api\BaseUserApiTest;
 use Laravel\Socialite\Facades\Socialite;
 use Laravel\Socialite\Two\User as SocialiteUser;
-use App\Models\User;
+use App\Models\User; // Re-added
 use Mockery;
 
-class GoogleCallbackTest extends TestCase
+class GoogleCallbackTest extends BaseUserApiTest
 {
     use RefreshDatabase;
 
@@ -60,7 +60,7 @@ class GoogleCallbackTest extends TestCase
 
     public function test_an_existing_user_can_login_via_google_callback()
     {
-        $existingUser = User::factory()->create([
+        $existingUser = $this->createUser([ // Using helper
             'email' => 'jane@example.com',
             'google_id' => 'google_id_456',
         ]);
