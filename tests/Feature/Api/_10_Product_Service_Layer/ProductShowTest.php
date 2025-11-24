@@ -1,27 +1,28 @@
 <?php
 
-namespace Tests\Feature\Api\_06_Product_Spatie_Media_Library;
+namespace Tests\Feature\Api\_10_Product_Service_Layer;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\WithFaker;
-use Tests\Feature\Api\BaseProductApiTest;
-use App\Models\Product as ProductModel;
+use Tests\Feature\Api\BasePermissionTest;
+use App\Models\Product;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
+use Spatie\Permission\Models\Permission;
+use Spatie\Permission\Models\Role;
 
-class ProductShowTest extends BaseProductApiTest
+class ProductShowTest extends BasePermissionTest
 {
     use RefreshDatabase, WithFaker;
 
-    protected string $apiVersion = 'v6';
+    protected string $apiVersion = 'v10';
 
-    public function test_authenticated_user_can_retrieve_a_single_product_with_media_data()
+    public function test_authenticated_user_with_permission_can_retrieve_a_single_product_with_media_data()
     {
         Storage::fake('public');
-        config()->set('media-library.queue_conversions_by_default', false);
+        Storage::fake('media');
 
-
-        $this->createAuthenticatedUser();
+        $this->createUserWithPermission('view products');
         $product = $this->createProduct();
 
         // Add Spatie Media Library images
@@ -59,10 +60,22 @@ class ProductShowTest extends BaseProductApiTest
             ]);
     }
 
+    public function test_authenticated_user_without_permission_cannot_retrieve_a_product()
+    {
+        $this->createAuthenticatedUser(); // User without 'view products' permission
+        $product = $this->createProduct();
+
+        $response = $this->getJson($this->getBaseUrl() . '/' . $product->id);
+
+        $response->assertStatus(403)
+            ->assertJson([
+                'message' => 'This action is unauthorized.',
+            ]);
+    }
+
     public function test_product_retrieval_returns_not_found_response()
     {
-        $this->createAuthenticatedUser();
-
+        $this->createUserWithPermission('view products'); // User with permission
         $response = $this->getJson($this->getBaseUrl() . '/9999'); // Non-existent ID
 
         $response->assertStatus(404)

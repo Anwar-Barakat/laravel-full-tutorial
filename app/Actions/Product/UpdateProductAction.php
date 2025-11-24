@@ -7,32 +7,56 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use App\Data\Product\ProductData;
 use Illuminate\Http\UploadedFile;
+use App\Services\Media\SpatieMediaUploadService;
+use App\Services\Media\DefaultStorageUploadService;
 
 class UpdateProductAction
 {
+    public function __construct(
+        protected SpatieMediaUploadService $spatieMediaUploadService,
+        protected DefaultStorageUploadService $defaultStorageUploadService
+    ) {}
+
     public function execute(Product $product, ProductData $productData): Product
     {
         return DB::transaction(function () use ($product, $productData) {
-            $product->update($productData->except('image', 'main_image', 'gallery_images', 'tags', 'delete_gallery_images')->toArray());
+            $updateData = [
+                'name' => $productData->name,
+                'description' => $productData->description,
+                'price' => $productData->price,
+                'stock' => $productData->stock,
+                'category_id' => $productData->category_id,
+            ];
 
+            // Handle the 'image' field specifically
             if ($productData->image instanceof UploadedFile) {
                 if ($product->image) {
-                    Storage::disk('public')->delete($product->image);
+                    $this->defaultStorageUploadService->delete($product->image);
                 }
-                $imagePath = $productData->image->store('products', 'public');
-                $product->image = $imagePath;
-                $product->save();
+                $imagePath = $this->defaultStorageUploadService->upload($productData->image, 'products', 'public');
+                $updateData['image'] = $imagePath;
+            } else if ($productData->image === null && isset($productData->image)) {
+                // If 'image' was explicitly sent as null in the request
+                if ($product->image) {
+                    $this->defaultStorageUploadService->delete($product->image);
+                }
+                $updateData['image'] = null;
             }
+            // If productData->image is not provided in the request at all, it would be null,
+            // and its value in $updateData would not be explicitly set. This is desired.
+
+
+            $product->update($updateData);
 
             if ($productData->main_image instanceof UploadedFile) {
                 $product->clearMediaCollection('main_image');
-                $product->addMedia($productData->main_image)->toMediaCollection('main_image');
+                $this->spatieMediaUploadService->upload($product, $productData->main_image, 'main_image');
             }
 
             if ($productData->gallery_images) {
                 foreach ($productData->gallery_images as $galleryImage) {
                     if ($galleryImage instanceof UploadedFile) {
-                        $product->addMedia($galleryImage)->toMediaCollection('gallery_images');
+                        $this->spatieMediaUploadService->upload($product, $galleryImage, 'gallery_images');
                     }
                 }
             }
@@ -41,6 +65,7 @@ class UpdateProductAction
                 foreach ($productData->delete_gallery_images as $mediaId) {
                     $product->deleteMedia($mediaId);
                 }
+                $product->load('media'); // Reload media relationships
             }
 
             if ($productData->tags !== null) {

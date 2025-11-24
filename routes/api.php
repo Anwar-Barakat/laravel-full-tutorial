@@ -112,22 +112,22 @@ Route::prefix('v6')->middleware(['auth:sanctum'])->group(function () {
 });
 
 // _07_Product_Form_Request_Handling
-Route::prefix('v7')->group(function () {
+Route::prefix('v7')->middleware(['auth:sanctum'])->group(function () {
     Route::apiResource('products', ProductControllerV7::class);
 });
 
 // _08_Product_Spatie_Role_Permission
-Route::prefix('v8')->group(function () {
+Route::prefix('v8')->middleware(['auth:sanctum'])->group(function () {
     Route::apiResource('products', ProductControllerV8::class);
 });
 
 // _09_Product_Spatie_Role_Permission_With_Policy
-Route::prefix('v9')->group(function () {
+Route::prefix('v9')->middleware(['auth:sanctum'])->group(function () {
     Route::apiResource('products', ProductControllerV9::class);
 });
 
 // _10_Product_Service_Layer
-Route::prefix('v10')->group(function () {
+Route::prefix('v10')->middleware(['auth:sanctum'])->group(function () {
     Route::apiResource('products', ProductControllerV10::class);
 });
 

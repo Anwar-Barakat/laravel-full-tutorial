@@ -6,8 +6,10 @@ use App\Models\Category;
 use App\Models\Product;
 use Illuminate\Support\Collection;
 use Tests\Feature\Api\BaseUserApiTest;
+use Spatie\MediaLibrary\MediaCollections\Models\Media;
+use Illuminate\Support\Facades\Storage;
 
-class BaseProductApiTest extends BaseUserApiTest
+abstract class BaseProductApiTest extends BaseUserApiTest
 {
     protected string $apiVersion = 'v1';
 
@@ -51,5 +53,14 @@ class BaseProductApiTest extends BaseUserApiTest
             $categories->push(Category::factory()->create($categoryAttrs));
         }
         return $categories;
+    }
+
+    /**
+     * Get the absolute path for a media file on a faked storage disk.
+     */
+    protected function getFakedMediaPath(Media $media): string
+    {
+        $diskRoot = Storage::disk($media->disk)->path('/');
+        return $diskRoot . $media->getPathRelativeToRoot();
     }
 }

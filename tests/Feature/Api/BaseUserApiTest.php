@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Hash; // Added
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
-class BaseUserApiTest extends TestCase
+abstract class BaseUserApiTest extends TestCase
 {
     protected function createAuthenticatedUser(array $attributes = [], array $abilities = ['*']): User
     {

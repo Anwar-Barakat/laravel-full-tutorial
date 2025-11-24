@@ -6,7 +6,7 @@ use App\Models\User;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
 
-class BasePermissionTest extends BaseProductApiTest
+abstract class BasePermissionTest extends BaseProductApiTest
 {
     protected function setUp(): void
     {

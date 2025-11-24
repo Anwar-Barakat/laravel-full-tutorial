@@ -39,12 +39,8 @@ class ProductDestroyTest extends BaseProductApiTest
 
         // Assert images exist before deletion
         Storage::disk('public')->assertExists($product->image);
-        
-        // Assert Spatie Media Library files exist on their respective faked disks
-        // Assuming 'media' disk is configured to use 'storage_path('app/media')' or similar for testing
-        // For testing, Spatie Media Library uses the 'public' disk by default when faking, so we assert on 'public'
-        Storage::disk($mediaMain->disk)->assertExists($mediaMain->getPathRelativeToRoot());
-        Storage::disk($mediaGallery1->disk)->assertExists($mediaGallery1->getPathRelativeToRoot());
+        \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($mediaMain));
+        \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($mediaGallery1));
 
         $response = $this->deleteJson($this->getBaseUrl() . '/' . $product->id);
 
@@ -56,8 +52,8 @@ class ProductDestroyTest extends BaseProductApiTest
 
         // Assert images are deleted from storage
         Storage::disk('public')->assertMissing($product->image);
-        Storage::disk($mediaMain->disk)->assertMissing($mediaMain->getPathRelativeToRoot());
-        Storage::disk($mediaGallery1->disk)->assertMissing($mediaGallery1->getPathRelativeToRoot());
+        \PHPUnit\Framework\Assert::assertFileDoesNotExist($this->getFakedMediaPath($mediaMain));
+        \PHPUnit\Framework\Assert::assertFileDoesNotExist($this->getFakedMediaPath($mediaGallery1));
     }
 
     public function test_product_deletion_returns_not_found_response()

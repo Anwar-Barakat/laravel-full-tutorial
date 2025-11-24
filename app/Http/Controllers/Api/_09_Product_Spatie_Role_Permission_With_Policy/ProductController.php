@@ -14,10 +14,18 @@ use App\Http\Resources\ProductResource;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Auth;
+use App\Services\Media\SpatieMediaUploadService;
+use App\Services\Media\DefaultStorageUploadService;
+
 
 class ProductController extends Controller
 {
     use ApiResponseTrait;
+
+    public function __construct(
+        protected  SpatieMediaUploadService $spatieMediaUploadService,
+        protected DefaultStorageUploadService $defaultStorageUploadService
+    ) {}
 
     public function index(Request $request)
     {
@@ -47,18 +55,18 @@ class ProductController extends Controller
             $product = Product::create($request->except(['image', 'main_image', 'gallery_images', 'tags']));
 
             if ($request->hasFile('image')) {
-                $imagePath = $request->file('image')->store('products', 'public');
+                $imagePath = $this->defaultStorageUploadService->upload($request->file('image'), 'products', 'public');
                 $product->image = $imagePath;
                 $product->save();
             }
 
             if ($request->hasFile('main_image')) {
-                $product->addMediaFromRequest('main_image')->toMediaCollection('main_image');
+                $this->spatieMediaUploadService->uploadFromRequest($product, 'main_image', 'main_image');
             }
 
             if ($request->hasFile('gallery_images')) {
                 foreach ($request->file('gallery_images') as $galleryImage) {
-                    $product->addMedia($galleryImage)->toMediaCollection('gallery_images');
+                    $this->spatieMediaUploadService->upload($product, $galleryImage, 'gallery_images');
                 }
             }
 
@@ -98,21 +106,21 @@ class ProductController extends Controller
 
             if ($request->hasFile('image')) {
                 if ($product->image) {
-                    Storage::disk('public')->delete($product->image);
+                    $this->defaultStorageUploadService->delete($product->image);
                 }
-                $imagePath = $request->file('image')->store('products', 'public');
+                $imagePath = $this->defaultStorageUploadService->upload($request->file('image'), 'products', 'public');
                 $product->image = $imagePath;
                 $product->save();
             }
 
             if ($request->hasFile('main_image')) {
                 $product->clearMediaCollection('main_image');
-                $product->addMediaFromRequest('main_image')->toMediaCollection('main_image');
+                $this->spatieMediaUploadService->uploadFromRequest($product, 'main_image', 'main_image');
             }
 
             if ($request->hasFile('gallery_images')) {
                 foreach ($request->file('gallery_images') as $galleryImage) {
-                    $product->addMedia($galleryImage)->toMediaCollection('gallery_images');
+                    $this->spatieMediaUploadService->upload($product, $galleryImage, 'gallery_images');
                 }
             }
 
@@ -141,7 +149,7 @@ class ProductController extends Controller
         $this->authorize('delete', $product);
 
         if ($product->image) {
-            Storage::disk('public')->delete($product->image);
+            $this->defaultStorageUploadService->delete($product->image);
         }
         $product->delete();
 

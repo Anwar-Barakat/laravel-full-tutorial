@@ -12,7 +12,7 @@ class ProductResource extends JsonResource
             'id' => $this->id,
             'name' => $this->name,
             'description' => $this->description,
-            'price' => $this->price,
+            'price' => (float) $this->price,
             'stock' => $this->stock,
             'image' => $this->image ? asset($this->image) : null,
             'media' => [
@@ -24,7 +24,7 @@ class ProductResource extends JsonResource
                     return [
                         'id' => $media->id,
                         'url' => $media->getFullUrl(),
-                        'thumb_url' => $media->hasGeneratedConversion('thumb') ? $media->getUrl('thumb') : null,
+                        'thumb_url' => $media->getUrl('thumb'),
                     ];
                 })->toArray(), // Convert collection to array
             ],

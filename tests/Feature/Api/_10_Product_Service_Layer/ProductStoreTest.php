@@ -1,28 +1,29 @@
 <?php
 
-namespace Tests\Feature\Api\_06_Product_Spatie_Media_Library;
+namespace Tests\Feature\Api\_10_Product_Service_Layer;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\WithFaker;
-use Tests\Feature\Api\BaseProductApiTest;
+use Tests\Feature\Api\BasePermissionTest;
 use App\Models\Product;
 use App\Models\Tag;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\File;
+use Spatie\Permission\Models\Permission;
+use Spatie\Permission\Models\Role;
 
-class ProductStoreTest extends BaseProductApiTest
+class ProductStoreTest extends BasePermissionTest
 {
     use RefreshDatabase, WithFaker;
 
-    protected string $apiVersion = 'v6';
+    protected string $apiVersion = 'v10';
 
-    public function test_authenticated_user_can_create_a_product_with_main_image_and_gallery_images()
+    public function test_authenticated_user_with_permission_can_create_a_product()
     {
         Storage::fake('public');
         Storage::fake('media');
 
-        $this->createAuthenticatedUser();
+        $this->createUserWithPermission('create products');
         $category = $this->createCategory();
         $tag1 = Tag::factory()->create();
         $tag2 = Tag::factory()->create();
@@ -61,59 +62,29 @@ class ProductStoreTest extends BaseProductApiTest
         // Assert Spatie Media Library images
         $this->assertCount(1, $product->getMedia('main_image'));
         $this->assertCount(2, $product->getMedia('gallery_images'));
-
-        // Assert the default 'image' field is null if not provided
-        $this->assertNull($product->image);
-
-        // Assert that the media files exist on the faked disk
         \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($product->getFirstMedia('main_image')));
         \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($product->getMedia('gallery_images')[0]));
         \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($product->getMedia('gallery_images')[1]));
     }
 
-    public function test_authenticated_user_can_create_a_product_with_only_default_image()
+    public function test_authenticated_user_without_permission_cannot_create_a_product()
     {
-        Storage::fake('public');
-
-        $this->createAuthenticatedUser();
+        $this->createAuthenticatedUser(); // User without 'create products' permission
         $category = $this->createCategory();
-
-        $defaultImage = UploadedFile::fake()->image('default_image.png');
 
         $productData = [
             'name' => $this->faker->sentence,
             'description' => $this->faker->paragraph,
             'price' => $this->faker->randomFloat(2, 1, 1000),
             'category_id' => $category->id,
-            'image' => $defaultImage,
         ];
 
         $response = $this->postJson($this->getBaseUrl(), $productData);
 
-        $response->assertStatus(201)
+        $response->assertStatus(403)
             ->assertJson([
-                'status' => 'success',
-                'success' => true,
-                'message' => 'Product created successfully.',
+                'message' => 'This action is unauthorized.',
             ]);
-
-        $product = Product::firstWhere('name', $productData['name']);
-        $this->assertNotNull($product->image);
-        Storage::disk('public')->assertExists('products/' . $defaultImage->hashName());
-        $this->assertStringContainsString($defaultImage->hashName(), $product->image);
-
-
-        $this->assertCount(0, $product->getMedia('main_image'));
-        $this->assertCount(0, $product->getMedia('gallery_images'));
-    }
-
-    public function test_product_creation_requires_name_description_price()
-    {
-        $this->createAuthenticatedUser();
-
-        $response = $this->postJson($this->getBaseUrl(), []);
-
-        $response->assertStatus(422);
     }
 
     public function test_unauthenticated_user_cannot_create_a_product()

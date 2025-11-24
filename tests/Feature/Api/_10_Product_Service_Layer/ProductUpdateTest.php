@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\Api\_09_Product_Spatie_Role_Permission_With_Policy;
+namespace Tests\Feature\Api\_10_Product_Service_Layer;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\WithFaker;
@@ -16,7 +16,7 @@ class ProductUpdateTest extends BasePermissionTest
 {
     use RefreshDatabase, WithFaker;
 
-    protected string $apiVersion = 'v9';
+    protected string $apiVersion = 'v10';
 
     public function test_authenticated_user_with_permission_can_update_a_product_with_new_main_image_and_add_gallery_images()
     {
@@ -67,6 +67,85 @@ class ProductUpdateTest extends BasePermissionTest
         // Assert new gallery images are added
         $this->assertCount(1, $product->getMedia('gallery_images'));
         \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($product->getMedia('gallery_images')[0]));
+    }
+
+    public function test_authenticated_user_with_permission_can_update_a_product_with_new_default_image()
+    {
+        // We are not testing file system operations here, only database updates for the 'image' field.
+        // Storage::fake('public'); // No need to fake storage if not asserting file existence
+
+        $this->createUserWithPermission('edit products');
+        // Create product with an initial image directly, relying on database only
+        $oldImagePath = 'products/initial_image.jpg';
+        $product = $this->createProduct(['image' => $oldImagePath]);
+        
+        $category = $this->createCategory();
+
+        $newDefaultImage = UploadedFile::fake()->image('new_default_image.jpg');
+        $newImageHashedPath = 'products/' . $newDefaultImage->hashName();
+
+        $updatedData = [
+            'name' => 'Updated Product Name',
+            'description' => 'Updated product description.',
+            'price' => 123.45,
+            'category_id' => $category->id,
+            'image' => $newDefaultImage,
+        ];
+
+        $response = $this->post($this->getBaseUrl() . '/' . $product->id, $updatedData + ['_method' => 'PUT']);
+
+        $response->assertStatus(200);
+
+        $product->fresh();
+        // Assert that the stored image path is now the new one in the database
+        $this->assertDatabaseHas('products', [
+            'id' => $product->id,
+            'image' => $newImageHashedPath,
+        ]);
+    }
+
+
+    public function test_authenticated_user_with_permission_can_update_a_product_and_delete_specific_gallery_images()
+    {
+        Storage::fake('public');
+        Storage::fake('media');
+
+        $this->createUserWithPermission('edit products');
+        $product = $this->createProduct();
+
+        // Add multiple gallery images
+        $galleryImage1 = UploadedFile::fake()->image('gallery_to_keep.jpg');
+        $galleryImage2 = UploadedFile::fake()->image('gallery_to_delete1.jpg');
+        $galleryImage3 = UploadedFile::fake()->image('gallery_to_delete2.jpg');
+
+        $media1 = $product->addMedia($galleryImage1)->toMediaCollection('gallery_images');
+        $media2 = $product->addMedia($galleryImage2)->toMediaCollection('gallery_images');
+        $media3 = $product->addMedia($galleryImage3)->toMediaCollection('gallery_images');
+
+        $this->assertCount(3, $product->getMedia('gallery_images'));
+
+        $updatedData = [
+            'name' => 'Updated Product Name',
+            'description' => 'Updated product description.',
+            'price' => 123.45,
+            'delete_gallery_images' => [$media2->id, $media3->id],
+        ];
+
+        $response = $this->putJson($this->getBaseUrl() . '/' . $product->id, $updatedData);
+
+        $response->assertStatus(200);
+
+        $product->fresh();
+        $product->load('media'); // Explicitly reload media relationships after fresh
+        // Assert that the deletion did happen correctly
+        $this->assertCount(1, $product->getMedia('gallery_images')); // Should now be 1
+        $this->assertNotNull($product->getMedia('gallery_images')->find($media1->id));
+        $this->assertNull($product->getMedia('gallery_images')->find($media2->id)); // Should be null
+        $this->assertNull($product->getMedia('gallery_images')->find($media3->id)); // Should be null
+
+        \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($media1));
+        \PHPUnit\Framework\Assert::assertFileDoesNotExist($this->getFakedMediaPath($media2));
+        \PHPUnit\Framework\Assert::assertFileDoesNotExist($this->getFakedMediaPath($media3));
     }
 
     public function test_authenticated_user_without_permission_cannot_update_a_product()

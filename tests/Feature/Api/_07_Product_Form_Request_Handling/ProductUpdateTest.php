@@ -59,13 +59,13 @@ class ProductUpdateTest extends BaseProductApiTest
         // Assert new main image is present and old one is gone
         $this->assertCount(1, $product->getMedia('main_image'));
         $this->assertEquals($newMainImage->getClientOriginalName(), $product->getFirstMedia('main_image')->file_name);
-        Storage::disk($oldMediaMain->disk)->assertMissing($oldMediaMain->getPathRelativeToRoot());
-        Storage::disk($product->getFirstMedia('main_image')->disk)->assertExists($product->getFirstMedia('main_image')->getPathRelativeToRoot());
+        \PHPUnit\Framework\Assert::assertFileDoesNotExist($this->getFakedMediaPath($oldMediaMain));
+        \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($product->getFirstMedia('main_image')));
 
 
         // Assert new gallery images are added
         $this->assertCount(1, $product->getMedia('gallery_images'));
-        Storage::disk($product->getMedia('gallery_images')[0]->disk)->assertExists($product->getMedia('gallery_images')[0]->getPathRelativeToRoot());
+        \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($product->getMedia('gallery_images')[0]));
     }
 
     public function test_authenticated_user_can_update_a_product_with_new_default_image()

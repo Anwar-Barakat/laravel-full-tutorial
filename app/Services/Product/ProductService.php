@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Services\_10_Product_Service_Layer;
+namespace App\Services\Product;
 
 use App\Models\Product;
 use App\Models\Category;
@@ -10,9 +10,16 @@ use Spatie\QueryBuilder\AllowedFilter;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Http\UploadedFile;
+use App\Services\Media\SpatieMediaUploadService;
+use App\Services\Media\DefaultStorageUploadService;
 
 class ProductService
 {
+    public function __construct(
+        protected SpatieMediaUploadService $spatieMediaUploadService,
+        protected DefaultStorageUploadService $defaultStorageUploadService
+    ) {}
+
     public function getAllProducts(array $queryParams)
     {
         return QueryBuilder::for(Product::class)
@@ -40,18 +47,18 @@ class ProductService
             $product = Product::create($data);
 
             if ($image) {
-                $imagePath = $image->store('products', 'public');
+                $imagePath = $this->defaultStorageUploadService->upload($image, 'products', 'public');
                 $product->image = $imagePath;
                 $product->save();
             }
 
             if ($mainImage) {
-                $product->addMedia($mainImage)->toMediaCollection('main_image');
+                $this->spatieMediaUploadService->upload($product, $mainImage, 'main_image');
             }
 
             if ($galleryImages) {
                 foreach ($galleryImages as $galleryImage) {
-                    $product->addMedia($galleryImage)->toMediaCollection('gallery_images');
+                    $this->spatieMediaUploadService->upload($product, $galleryImage, 'gallery_images');
                 }
             }
 
@@ -66,25 +73,31 @@ class ProductService
     public function updateProduct(Product $product, array $data, ?UploadedFile $image = null, ?UploadedFile $mainImage = null, ?array $galleryImages = null, ?array $tags = null, ?array $deleteGalleryImages = null): Product
     {
         return DB::transaction(function () use ($product, $data, $image, $mainImage, $galleryImages, $tags, $deleteGalleryImages) {
-            $product->update($data);
+            $attributesToUpdate = $data;
 
+            // Handle the 'image' field before updating other data
             if ($image) {
                 if ($product->image) {
-                    Storage::disk('public')->delete($product->image);
+                    $this->defaultStorageUploadService->delete($product->image);
                 }
-                $imagePath = $image->store('products', 'public');
-                $product->image = $imagePath;
-                $product->save();
+                $attributesToUpdate['image'] = $this->defaultStorageUploadService->upload($image, 'products', 'public');
+            } elseif (array_key_exists('image', $attributesToUpdate) && $attributesToUpdate['image'] === null) {
+                if ($product->image) {
+                    $this->defaultStorageUploadService->delete($product->image);
+                }
+                $attributesToUpdate['image'] = null;
             }
+
+            $product->update($attributesToUpdate);
 
             if ($mainImage) {
                 $product->clearMediaCollection('main_image');
-                $product->addMedia($mainImage)->toMediaCollection('main_image');
+                $this->spatieMediaUploadService->upload($product, $mainImage, 'main_image');
             }
 
             if ($galleryImages) {
                 foreach ($galleryImages as $galleryImage) {
-                    $product->addMedia($galleryImage)->toMediaCollection('gallery_images');
+                    $this->spatieMediaUploadService->upload($product, $galleryImage, 'gallery_images');
                 }
             }
 
@@ -92,6 +105,7 @@ class ProductService
                 foreach ($deleteGalleryImages as $mediaId) {
                     $product->deleteMedia($mediaId);
                 }
+                $product->load('media'); // Reload media relationships
             }
 
             if ($tags !== null) {
@@ -106,7 +120,7 @@ class ProductService
     {
         return DB::transaction(function () use ($product) {
             if ($product->image) {
-                Storage::disk('public')->delete($product->image);
+                $this->defaultStorageUploadService->delete($product->image);
             }
             return $product->delete();
         });

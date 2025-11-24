@@ -62,8 +62,9 @@ class ProductStoreTest extends BasePermissionTest
         // Assert Spatie Media Library images
         $this->assertCount(1, $product->getMedia('main_image'));
         $this->assertCount(2, $product->getMedia('gallery_images'));
-        Storage::disk($product->getFirstMedia('main_image')->disk)->assertExists($product->getFirstMedia('main_image')->getPathRelativeToRoot());
-        Storage::disk($product->getMedia('gallery_images')[0]->disk)->assertExists($product->getMedia('gallery_images')[0]->getPathRelativeToRoot());
+        \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($product->getFirstMedia('main_image')));
+        \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($product->getMedia('gallery_images')[0]));
+        \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($product->getMedia('gallery_images')[1]));
     }
 
     public function test_authenticated_user_without_permission_cannot_create_a_product()

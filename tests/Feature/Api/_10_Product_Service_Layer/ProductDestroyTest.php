@@ -1,6 +1,6 @@
 <?php
 
-namespace Tests\Feature\Api\_09_Product_Spatie_Role_Permission_With_Policy;
+namespace Tests\Feature\Api\_10_Product_Service_Layer;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\WithFaker;
@@ -15,7 +15,7 @@ class ProductDestroyTest extends BasePermissionTest
 {
     use RefreshDatabase, WithFaker;
 
-    protected string $apiVersion = 'v9';
+    protected string $apiVersion = 'v10';
 
     public function test_authenticated_user_with_permission_can_delete_a_product_and_its_associated_images()
     {

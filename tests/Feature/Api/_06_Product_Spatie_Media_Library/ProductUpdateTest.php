@@ -59,13 +59,13 @@ class ProductUpdateTest extends BaseProductApiTest
         // Assert new main image is present and old one is gone
         $this->assertCount(1, $product->getMedia('main_image'));
         $this->assertEquals($newMainImage->getClientOriginalName(), $product->getFirstMedia('main_image')->file_name);
-        Storage::disk($oldMediaMain->disk)->assertMissing($oldMediaMain->getPathRelativeToRoot()); // Assert old media is gone from disk
-        Storage::disk($product->getFirstMedia('main_image')->disk)->assertExists($product->getFirstMedia('main_image')->getPathRelativeToRoot());
+        \PHPUnit\Framework\Assert::assertFileDoesNotExist($this->getFakedMediaPath($oldMediaMain));
+        \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($product->getFirstMedia('main_image')));
 
 
         // Assert new gallery images are added
         $this->assertCount(1, $product->getMedia('gallery_images'));
-        Storage::disk($product->getMedia('gallery_images')[0]->disk)->assertExists($product->getMedia('gallery_images')[0]->getPathRelativeToRoot());
+        \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($product->getMedia('gallery_images')[0]));
     }
 
     public function test_authenticated_user_can_update_a_product_with_new_default_image()
@@ -144,7 +144,7 @@ class ProductUpdateTest extends BaseProductApiTest
         $response->assertStatus(500); // Expect a 500 due to the TypeError in the controller
     }
 
-    public function test_product_update_requires_name_description_price()
+    public function test_product_update_requires_name_description_price_if_present()
     {
         $this->createAuthenticatedUser();
         $product = $this->createProduct();
@@ -155,7 +155,63 @@ class ProductUpdateTest extends BaseProductApiTest
             'price' => null, // Invalid
         ]);
 
-        $response->assertStatus(422);
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['name', 'description', 'price']);
+    }
+
+
+
+    public function test_product_update_fails_with_invalid_price()
+    {
+        $this->createAuthenticatedUser();
+        $product = $this->createProduct();
+
+        $updatedData = [
+            'name' => $this->faker->sentence,
+            'description' => $this->faker->paragraph,
+            'price' => -10, // Invalid price
+        ];
+
+        $response = $this->putJson($this->getBaseUrl() . '/' . $product->id, $updatedData);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['price']);
+    }
+
+    public function test_product_update_fails_with_non_existent_category_id()
+    {
+        $this->createAuthenticatedUser();
+        $product = $this->createProduct();
+
+        $updatedData = [
+            'name' => $this->faker->sentence,
+            'description' => $this->faker->paragraph,
+            'price' => $this->faker->randomFloat(2, 1, 1000),
+            'category_id' => 9999, // Non-existent category ID
+        ];
+
+        $response = $this->putJson($this->getBaseUrl() . '/' . $product->id, $updatedData);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['category_id']);
+    }
+
+    public function test_product_update_fails_with_invalid_tag_ids()
+    {
+        $this->createAuthenticatedUser();
+        $product = $this->createProduct();
+
+        $updatedData = [
+            'name' => $this->faker->sentence,
+            'description' => $this->faker->paragraph,
+            'price' => $this->faker->randomFloat(2, 1, 1000),
+            'tags' => [999, 1000], // Non-existent tag IDs
+        ];
+
+        $response = $this->putJson($this->getBaseUrl() . '/' . $product->id, $updatedData);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['tags.0', 'tags.1']);
     }
 
     public function test_unauthenticated_user_cannot_update_a_product()
