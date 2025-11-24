@@ -65,9 +65,9 @@ class ProductStoreTest extends BaseProductApiTest
         $this->assertNull($product->image);
 
         // Assert that the media files exist on the faked disk
-        Storage::disk($product->getFirstMedia('main_image')->disk)->assertExists($product->getFirstMedia('main_image')->getPathRelativeToRoot());
-        Storage::disk($product->getMedia('gallery_images')[0]->disk)->assertExists($product->getMedia('gallery_images')[0]->getPathRelativeToRoot());
-        Storage::disk($product->getMedia('gallery_images')[1]->disk)->assertExists($product->getMedia('gallery_images')[1]->getPathRelativeToRoot());
+        \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($product->getFirstMedia('main_image')));
+        \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($product->getMedia('gallery_images')[0]));
+        \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($product->getMedia('gallery_images')[1]));
     }
 
     public function test_authenticated_user_can_create_a_product_with_only_default_image()

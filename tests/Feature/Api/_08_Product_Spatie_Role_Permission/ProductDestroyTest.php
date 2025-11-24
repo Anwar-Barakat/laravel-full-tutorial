@@ -40,8 +40,8 @@ class ProductDestroyTest extends BasePermissionTest
 
         // Assert images exist before deletion
         Storage::disk('public')->assertExists($product->image);
-        Storage::disk($mediaMain->disk)->assertExists($mediaMain->getPathRelativeToRoot());
-        Storage::disk($mediaGallery1->disk)->assertExists($mediaGallery1->getPathRelativeToRoot());
+        \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($mediaMain));
+        \PHPUnit\Framework\Assert::assertFileExists($this->getFakedMediaPath($mediaGallery1));
 
         $response = $this->deleteJson($this->getBaseUrl() . '/' . $product->id);
 
@@ -53,8 +53,8 @@ class ProductDestroyTest extends BasePermissionTest
 
         // Assert images are deleted from storage
         Storage::disk('public')->assertMissing($product->image);
-        Storage::disk($mediaMain->disk)->assertMissing($mediaMain->getPathRelativeToRoot());
-        Storage::disk($mediaGallery1->disk)->assertMissing($mediaGallery1->getPathRelativeToRoot());
+        \PHPUnit\Framework\Assert::assertFileDoesNotExist($this->getFakedMediaPath($mediaMain));
+        \PHPUnit\Framework\Assert::assertFileDoesNotExist($this->getFakedMediaPath($mediaGallery1));
     }
 
     public function test_authenticated_user_without_permission_cannot_delete_a_product()

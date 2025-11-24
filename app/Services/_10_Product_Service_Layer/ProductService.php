@@ -66,16 +66,22 @@ class ProductService
     public function updateProduct(Product $product, array $data, ?UploadedFile $image = null, ?UploadedFile $mainImage = null, ?array $galleryImages = null, ?array $tags = null, ?array $deleteGalleryImages = null): Product
     {
         return DB::transaction(function () use ($product, $data, $image, $mainImage, $galleryImages, $tags, $deleteGalleryImages) {
-            $product->update($data);
+            $attributesToUpdate = $data;
 
+            // Handle the 'image' field before updating other data
             if ($image) {
                 if ($product->image) {
                     Storage::disk('public')->delete($product->image);
                 }
-                $imagePath = $image->store('products', 'public');
-                $product->image = $imagePath;
-                $product->save();
+                $attributesToUpdate['image'] = $image->store('products', 'public');
+            } elseif (array_key_exists('image', $attributesToUpdate) && $attributesToUpdate['image'] === null) {
+                if ($product->image) {
+                    Storage::disk('public')->delete($product->image);
+                }
+                $attributesToUpdate['image'] = null;
             }
+
+            $product->update($attributesToUpdate);
 
             if ($mainImage) {
                 $product->clearMediaCollection('main_image');
@@ -92,12 +98,13 @@ class ProductService
                 foreach ($deleteGalleryImages as $mediaId) {
                     $product->deleteMedia($mediaId);
                 }
+                $product->load('media'); // Reload media relationships
             }
 
             if ($tags !== null) {
                 $product->tags()->sync($tags);
             }
-
+            
             return $product;
         });
     }
