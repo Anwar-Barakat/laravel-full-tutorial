@@ -25,7 +25,7 @@ class ProductUpdateTest extends BaseProductApiTest
             'category_id' => $category->id,
         ];
 
-        $response = $this->putJson('/api/v1/products/' . $product->id, $updatedData);
+        $response = $this->putJson($this->getBaseUrl() . '/' . $product->id, $updatedData);
 
         $response->assertStatus(200)
             ->assertJson([
@@ -63,7 +63,7 @@ class ProductUpdateTest extends BaseProductApiTest
             'image' => $newImage,
         ];
 
-        $response = $this->post('/api/v1/products/' . $product->id, $updatedData + ['_method' => 'PUT']);
+        $response = $this->post($this->getBaseUrl() . '/' . $product->id, $updatedData + ['_method' => 'PUT']);
 
         $response->assertStatus(200)
             ->assertJson([
@@ -89,7 +89,7 @@ class ProductUpdateTest extends BaseProductApiTest
         $this->createAuthenticatedUser();
         $product = $this->createProduct(); // Using helper
 
-        $response = $this->putJson('/api/v1/products/' . $product->id, [
+        $response = $this->putJson($this->getBaseUrl() . '/' . $product->id, [
             'name' => '', // Invalid
             'description' => '', // Invalid
             'price' => null, // Invalid
@@ -110,7 +110,7 @@ class ProductUpdateTest extends BaseProductApiTest
             'price' => -10, // Invalid price
         ];
 
-        $response = $this->putJson('/api/v1/products/' . $product->id, $updatedData);
+        $response = $this->putJson($this->getBaseUrl() . '/' . $product->id, $updatedData);
 
         $response->assertStatus(422)
             ->assertJsonValidationErrors(['price']);
@@ -125,7 +125,7 @@ class ProductUpdateTest extends BaseProductApiTest
             'price' => 123.45,
         ];
 
-        $response = $this->putJson('/api/v1/products/9999', $updatedData); // Non-existent ID
+        $response = $this->putJson($this->getBaseUrl() . '/9999', $updatedData); // Non-existent ID
 
         $response->assertStatus(404);
     }
@@ -139,7 +139,7 @@ class ProductUpdateTest extends BaseProductApiTest
             'price' => 123.45,
         ];
 
-        $response = $this->putJson('/api/v1/products/' . $product->id, $updatedData);
+        $response = $this->putJson($this->getBaseUrl() . '/' . $product->id, $updatedData);
 
         $response->assertStatus(401); // Unauthorized
     }

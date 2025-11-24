@@ -25,7 +25,7 @@ class ProductStoreTest extends BaseProductApiTest
             'category_id' => $category->id,
         ];
 
-        $response = $this->postJson('/api/v1/products', $productData);
+        $response = $this->postJson($this->getBaseUrl(), $productData);
 
         $response->assertStatus(201)
             ->assertJson([
@@ -60,7 +60,7 @@ class ProductStoreTest extends BaseProductApiTest
             'image' => $image,
         ];
 
-        $response = $this->postJson('/api/v1/products', $productData);
+        $response = $this->postJson($this->getBaseUrl(), $productData);
 
         $response->assertStatus(201)
             ->assertJson([
@@ -85,7 +85,7 @@ class ProductStoreTest extends BaseProductApiTest
     {
         $this->createAuthenticatedUser();
 
-        $response = $this->postJson('/api/v1/products', []);
+        $response = $this->postJson($this->getBaseUrl(), []);
 
         $response->assertStatus(422)
             ->assertJsonValidationErrors(['name', 'description', 'price']);
@@ -103,7 +103,7 @@ class ProductStoreTest extends BaseProductApiTest
             'category_id' => $category->id,
         ];
 
-        $response = $this->postJson('/api/v1/products', $productData);
+        $response = $this->postJson($this->getBaseUrl(), $productData);
 
         $response->assertStatus(422)
             ->assertJsonValidationErrors(['price']);
@@ -120,7 +120,7 @@ class ProductStoreTest extends BaseProductApiTest
             'category_id' => 9999, // Non-existent category ID
         ];
 
-        $response = $this->postJson('/api/v1/products', $productData);
+        $response = $this->postJson($this->getBaseUrl(), $productData);
 
         $response->assertStatus(422)
             ->assertJsonValidationErrors(['category_id']);
@@ -136,7 +136,7 @@ class ProductStoreTest extends BaseProductApiTest
             'category_id' => $category->id, // Provide a valid category_id
         ];
 
-        $response = $this->postJson('/api/v1/products', $productData);
+        $response = $this->postJson($this->getBaseUrl(), $productData);
 
         $response->assertStatus(401); // Unauthorized
     }

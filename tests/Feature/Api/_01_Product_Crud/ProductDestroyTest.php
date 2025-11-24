@@ -13,9 +13,9 @@ class ProductDestroyTest extends BaseProductApiTest
     public function test_authenticated_user_can_delete_a_product()
     {
         $this->createAuthenticatedUser();
-        $product = $this->createProduct();
+        $product = $this->createProduct(); // Define $product here
 
-        $response = $this->deleteJson('/api/v1/products/' . $product->id);
+        $response = $this->deleteJson($this->getBaseUrl() . '/' . $product->id);
 
         $response->assertStatus(204); // No Content
 
@@ -26,16 +26,16 @@ class ProductDestroyTest extends BaseProductApiTest
     {
         $this->createAuthenticatedUser();
 
-        $response = $this->deleteJson('/api/v1/products/9999'); // Non-existent ID
+        $response = $this->deleteJson($this->getBaseUrl() . '/9999'); // Non-existent ID
 
         $response->assertStatus(404);
     }
 
     public function test_unauthenticated_user_cannot_delete_a_product()
     {
-        $product = $this->createProduct();
+        $product = $this->createProduct(); // Define $product here
 
-        $response = $this->deleteJson('/api/v1/products/' . $product->id);
+        $response = $this->deleteJson($this->getBaseUrl() . '/' . $product->id);
 
         $response->assertStatus(401); // Unauthorized
     }

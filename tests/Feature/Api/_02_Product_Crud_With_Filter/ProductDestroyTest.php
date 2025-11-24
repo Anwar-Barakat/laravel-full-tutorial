@@ -5,24 +5,41 @@ namespace Tests\Feature\Api\_02_Product_Crud_With_Filter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\WithFaker;
 use Tests\Feature\Api\BaseProductApiTest;
+use App\Models\Product;
 
 class ProductDestroyTest extends BaseProductApiTest
 {
     use RefreshDatabase, WithFaker;
 
-    public function test_given_existing_product_when_destroy_called_then_deletes()
+    protected string $apiVersion = 'v2';
+
+    public function test_authenticated_user_can_delete_a_product()
     {
+        $this->createAuthenticatedUser();
         $product = $this->createProduct();
 
-        $response = $this->deleteJson('/api/v2/products/' . $product->id);
+        $response = $this->deleteJson($this->getBaseUrl() . '/' . $product->id);
 
-        $response->assertStatus(204);
+        $response->assertStatus(204); // No Content
+
         $this->assertDatabaseMissing('products', ['id' => $product->id]);
     }
 
-    public function test_given_nonexistent_id_when_destroy_called_then_returns_404()
+    public function test_product_deletion_returns_404_if_product_not_found()
     {
-        $response = $this->deleteJson('/api/v2/products/9999');
+        $this->createAuthenticatedUser();
+
+        $response = $this->deleteJson($this->getBaseUrl() . '/9999'); // Non-existent ID
+
         $response->assertStatus(404);
+    }
+
+    public function test_unauthenticated_user_cannot_delete_a_product()
+    {
+        $product = $this->createProduct();
+
+        $response = $this->deleteJson($this->getBaseUrl() . '/' . $product->id);
+
+        $response->assertStatus(401); // Unauthorized
     }
 }

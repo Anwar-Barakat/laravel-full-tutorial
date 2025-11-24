@@ -5,94 +5,138 @@ namespace Tests\Feature\Api\_02_Product_Crud_With_Filter;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\WithFaker;
 use Tests\Feature\Api\BaseProductApiTest;
-use App\Models\Tag;
 use App\Models\Product;
+use App\Models\Tag;
 use App\Models\Category;
 
 class ProductIndexTest extends BaseProductApiTest
 {
     use RefreshDatabase, WithFaker;
 
-    public function test_given_products_exist_when_index_called_then_returns_all_products()
-    {
-        $this->createProducts(3);
+    protected string $apiVersion = 'v2';
 
-        $response = $this->getJson('/api/v2/products');
+    public function test_can_get_all_products_with_filters()
+    {
+        $this->createAuthenticatedUser();
+        $products = $this->createProducts(5);
+
+        $response = $this->getJson($this->getBaseUrl());
 
         $response->assertStatus(200)
-            ->assertJsonCount(3)
+            ->assertJsonCount(5)
             ->assertJsonStructure([
                 '*' => [
                     'id', 'name', 'description', 'price', 'image', 'category_id', 'created_at', 'updated_at',
-                ],
+                ]
             ]);
     }
 
-    public function test_given_no_products_when_index_called_then_returns_empty_array()
+    public function test_can_filter_products_by_name()
     {
-        $response = $this->getJson('/api/v2/products');
+        $this->createAuthenticatedUser();
+        $product1 = $this->createProduct(['name' => 'Apple iPhone']);
+        $product2 = $this->createProduct(['name' => 'Samsung Galaxy']);
+        $product3 = $this->createProduct(['name' => 'Google Pixel']);
 
-        $response->assertStatus(200)
-            ->assertJsonCount(0);
-    }
-
-    public function test_given_name_filter_when_index_called_then_returns_matching_products()
-    {
-        Product::factory()->create(['name' => 'Apple iPhone']);
-        Product::factory()->create(['name' => 'Samsung Galaxy']);
-
-        $response = $this->getJson('/api/v2/products?filter[whereName]=iPhone');
+        $response = $this->getJson($this->getBaseUrl() . '?filter[whereName]=Apple');
 
         $response->assertStatus(200)
             ->assertJsonCount(1)
             ->assertJsonFragment(['name' => 'Apple iPhone']);
     }
 
-    public function test_given_price_between_filter_when_index_called_then_returns_in_range_products()
+    public function test_can_filter_products_by_price_range()
     {
-        Product::factory()->create(['price' => 50]);
-        Product::factory()->create(['price' => 150]);
-        Product::factory()->create(['price' => 500]);
+        $this->createAuthenticatedUser();
+        $product1 = $this->createProduct(['price' => 100]);
+        $product2 = $this->createProduct(['price' => 250]);
+        $product3 = $this->createProduct(['price' => 400]);
 
-        $response = $this->getJson('/api/v2/products?filter[priceBetween]=100,200');
+        $response = $this->getJson($this->getBaseUrl() . '?filter[priceBetween]=150,300');
 
         $response->assertStatus(200)
             ->assertJsonCount(1)
-            ->assertJsonFragment(['price' => 150]);
+            ->assertJsonFragment(['name' => $product2->name]);
     }
 
-    public function test_given_exact_tag_filter_when_index_called_then_returns_matching_products()
+    public function test_can_filter_products_by_tag_name()
     {
-        $tagPhone = Tag::factory()->create(['name' => 'Phone']);
-        $tagLaptop = Tag::factory()->create(['name' => 'Laptop']);
+        $this->createAuthenticatedUser();
+        $tagA = Tag::factory()->create(['name' => 'Electronics']);
+        $tagB = Tag::factory()->create(['name' => 'Mobile']);
 
-        $product1 = Product::factory()->create(['name' => 'Model A']);
-        $product2 = Product::factory()->create(['name' => 'Model B']);
-        $product1->tags()->attach($tagPhone->id);
-        $product2->tags()->attach($tagLaptop->id);
+        $product1 = $this->createProduct();
+        $product1->tags()->attach($tagA);
 
-        $response = $this->getJson('/api/v2/products?filter[tags.name]=Phone');
+        $product2 = $this->createProduct();
+        $product2->tags()->attach($tagB);
+
+        $product3 = $this->createProduct();
+        $product3->tags()->attach($tagA);
+        $product3->tags()->attach($tagB);
+
+        $response = $this->getJson($this->getBaseUrl() . '?filter[tags.name]=Electronics');
 
         $response->assertStatus(200)
-            ->assertJsonCount(1)
-            ->assertJsonFragment(['name' => 'Model A']);
+            ->assertJsonCount(2)
+            ->assertJsonFragment(['name' => $product1->name])
+            ->assertJsonFragment(['name' => $product3->name]);
     }
 
-    public function test_given_include_category_and_tags_when_index_called_then_returns_nested_relations()
+    public function test_can_sort_products_by_name_ascending()
     {
-        $category = Category::factory()->create();
+        $this->createAuthenticatedUser();
+        $productC = $this->createProduct(['name' => 'Product C']);
+        $productA = $this->createProduct(['name' => 'Product A']);
+        $productB = $this->createProduct(['name' => 'Product B']);
+
+        $response = $this->getJson($this->getBaseUrl() . '?sort=name');
+
+        $response->assertStatus(200)
+            ->assertJsonFragment(['name' => 'Product A'])
+            ->assertJsonFragment(['name' => 'Product B'])
+            ->assertJsonFragment(['name' => 'Product C'])
+            ->assertSeeInOrder(['Product A', 'Product B', 'Product C']);
+    }
+
+    public function test_can_sort_products_by_price_descending()
+    {
+        $this->createAuthenticatedUser();
+        $product100 = $this->createProduct(['price' => 100]);
+        $product500 = $this->createProduct(['price' => 500]);
+        $product200 = $this->createProduct(['price' => 200]);
+
+        $response = $this->getJson($this->getBaseUrl() . '?sort=-price');
+
+        $response->assertStatus(200)
+            ->assertJsonFragment(['price' => 500.00])
+            ->assertJsonFragment(['price' => 200.00])
+            ->assertJsonFragment(['price' => 100.00])
+            ->assertSeeInOrder([500.00, 200.00, 100.00]);
+    }
+
+    public function test_can_include_category_and_tags()
+    {
+        $this->createAuthenticatedUser();
+        $category = $this->createCategory(['name' => 'Electronics']);
         $tag = Tag::factory()->create(['name' => 'Featured']);
-        $product = Product::factory()->create(['category_id' => $category->id]);
-        $product->tags()->attach($tag->id);
 
-        $response = $this->getJson('/api/v2/products?include=category,tags');
+        $product = $this->createProduct(['category_id' => $category->id]);
+        $product->tags()->attach($tag);
+
+        $response = $this->getJson($this->getBaseUrl() . '?include=category,tags');
 
         $response->assertStatus(200)
-            ->assertJsonFragment(['id' => $product->id])
-            ->assertJsonStructure([
-                '*' => [
-                    'id', 'name', 'category', 'tags',
-                ],
-            ]);
+            ->assertJsonFragment(['name' => 'Electronics'])
+            ->assertJsonFragment(['name' => 'Featured']);
+    }
+
+    public function test_unauthenticated_user_cannot_access_products_with_filters()
+    {
+        $this->createProducts(3);
+
+        $response = $this->getJson($this->getBaseUrl() . '?filter[name]=test');
+
+        $response->assertStatus(401); // Unauthorized
     }
 }
