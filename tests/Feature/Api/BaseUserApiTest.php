@@ -10,13 +10,6 @@ use Tests\TestCase;
 
 class BaseUserApiTest extends TestCase
 {
-    /**
-     * Create and authenticate a user.
-     *
-     * @param array $attributes Additional attributes for the user factory.
-     * @param array $abilities Abilities for Sanctum authentication.
-     * @return User
-     */
     protected function createAuthenticatedUser(array $attributes = [], array $abilities = ['*']): User
     {
         $user = User::factory()->create($attributes);
@@ -24,24 +17,11 @@ class BaseUserApiTest extends TestCase
         return $user;
     }
 
-    /**
-     * Create a user with specified attributes.
-     *
-     * @param array $attributes
-     * @return User
-     */
     protected function createUser(array $attributes = []): User
     {
         return User::factory()->create($attributes);
     }
 
-    /**
-     * Create a user with a specific raw password.
-     *
-     * @param string $password The raw password.
-     * @param array $attributes Additional attributes for the user factory.
-     * @return User
-     */
     protected function createPasswordedUser(string $password, array $attributes = []): User
     {
         return User::factory()->create(array_merge($attributes, [
@@ -49,12 +29,6 @@ class BaseUserApiTest extends TestCase
         ]));
     }
 
-    /**
-     * Create a verified user with specified attributes.
-     *
-     * @param array $attributes
-     * @return User
-     */
     protected function createVerifiedUser(array $attributes = []): User
     {
         return User::factory()->create(array_merge($attributes, [
@@ -62,12 +36,6 @@ class BaseUserApiTest extends TestCase
         ]));
     }
 
-    /**
-     * Create an unverified user with specified attributes.
-     *
-     * @param array $attributes
-     * @return User
-     */
     protected function createUnverifiedUser(array $attributes = []): User
     {
         return User::factory()->create(array_merge($attributes, [
@@ -75,13 +43,6 @@ class BaseUserApiTest extends TestCase
         ]));
     }
 
-    /**
-     * Create multiple users with specified attributes.
-     *
-     * @param int $count The number of users to create.
-     * @param array $attributes Attributes for each user, or an array of attribute arrays.
-     * @return Collection<User>
-     */
     protected function createUsers(int $count = 1, array $attributes = []): Collection
     {
         if (empty($attributes) || ! is_array(reset($attributes))) {

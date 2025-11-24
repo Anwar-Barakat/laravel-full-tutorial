@@ -12,6 +12,8 @@ use App\Http\Controllers\Api\_02_Product_Crud_With_Filter\ProductController as P
 // _03_Product_Crud_With_Resource
 use App\Http\Controllers\Api\_03_Product_Crud_With_Resource\ProductController as ProductControllerV3;
 
+
+
 // _04_Product_ApiResponse_Refactor
 use App\Http\Controllers\Api\_04_Product_ApiResponse_Refactor\ProductController as ProductControllerV4;
 
@@ -88,9 +90,11 @@ Route::prefix('v2')->middleware(['auth:sanctum'])->group(function () {
 });
 
 // _03_Product_Crud_With_Resource
-Route::prefix('v3')->group(function () {
+Route::prefix('v3')->middleware(['auth:sanctum'])->group(function () {
     Route::apiResource('products', ProductControllerV3::class);
 });
+
+
 
 // _04_Product_ApiResponse_Refactor
 Route::prefix('v4')->group(function () {
