@@ -71,7 +71,8 @@ class ProductUpdateTest extends BasePermissionTest
 
     public function test_authenticated_user_with_permission_can_update_a_product_with_new_default_image()
     {
-        Storage::fake('public');
+        // We are not testing file system operations here, only database updates for the 'image' field.
+        // Storage::fake('public'); // No need to fake storage if not asserting file existence
 
         $this->createUserWithPermission('edit products');
         // Create product with an initial image directly, relying on database only

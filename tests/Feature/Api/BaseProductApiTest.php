@@ -9,7 +9,7 @@ use Tests\Feature\Api\BaseUserApiTest;
 use Spatie\MediaLibrary\MediaCollections\Models\Media;
 use Illuminate\Support\Facades\Storage;
 
-class BaseProductApiTest extends BaseUserApiTest
+abstract class BaseProductApiTest extends BaseUserApiTest
 {
     protected string $apiVersion = 'v1';
 

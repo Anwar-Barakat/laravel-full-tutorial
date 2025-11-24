@@ -9,7 +9,7 @@ use App\Http\Requests\Api\Product\UpdateProductRequest;
 use App\Models\Product;
 use App\Http\Traits\ApiResponseTrait;
 use App\Http\Resources\ProductResource;
-use App\Services\_10_Product_Service_Layer\ProductService;
+use App\Services\Product\ProductService;
 
 class ProductController extends Controller
 {
