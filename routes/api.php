@@ -97,17 +97,17 @@ Route::prefix('v3')->middleware(['auth:sanctum'])->group(function () {
 
 
 // _04_Product_ApiResponse_Refactor
-Route::prefix('v4')->group(function () {
+Route::prefix('v4')->middleware(['auth:sanctum'])->group(function () {
     Route::apiResource('products', ProductControllerV4::class);
 });
 
 // _05_Product_Review_Polymorphic
-Route::prefix('v5')->group(function () {
+Route::prefix('v5')->middleware(['auth:sanctum'])->group(function () {
     Route::apiResource('products.reviews', ReviewController::class)->only(['index', 'store']);
 });
 
 // _06_Product_Spatie_Media_Library
-Route::prefix('v6')->group(function () {
+Route::prefix('v6')->middleware(['auth:sanctum'])->group(function () {
     Route::apiResource('products', ProductControllerV6::class);
 });
 
