@@ -49,6 +49,10 @@ class ProductController extends Controller
             $product->save();
         }
 
+        if ($request->has('tags')) {
+            $product->tags()->sync($request->input('tags'));
+        }
+
         return response()->json($product, 201);
     }
 
@@ -80,6 +84,10 @@ class ProductController extends Controller
             $imagePath = $request->file('image')->store('products', 'public');
             $product->image = $imagePath;
             $product->save();
+        }
+
+        if ($request->has('tags')) {
+            $product->tags()->sync($request->input('tags'));
         }
 
         return response()->json($product);

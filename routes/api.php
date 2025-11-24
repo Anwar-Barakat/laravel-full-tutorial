@@ -83,7 +83,7 @@ Route::prefix('v1')->middleware(['auth:sanctum'])->group(function () {
 });
 
 // _02_Product_Crud_With_Filter
-Route::prefix('v2')->group(function () {
+Route::prefix('v2')->middleware(['auth:sanctum'])->group(function () {
     Route::apiResource('products', ProductControllerV2::class);
 });
 

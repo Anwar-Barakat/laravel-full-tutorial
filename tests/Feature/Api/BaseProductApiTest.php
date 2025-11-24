@@ -10,6 +10,23 @@ use Tests\Feature\Api\BaseUserApiTest;
 class BaseProductApiTest extends BaseUserApiTest
 {
     /**
+     * The API version for the product routes.
+     *
+     * @var string
+     */
+    protected string $apiVersion = 'v1';
+
+    /**
+     * Get the base URL for the product API.
+     *
+     * @return string
+     */
+    protected function getBaseUrl(): string
+    {
+        return "/api/{$this->apiVersion}/products";
+    }
+
+    /**
      * Create a single product with specified attributes.
      *
      * @param array $attributes Additional attributes for the product factory.

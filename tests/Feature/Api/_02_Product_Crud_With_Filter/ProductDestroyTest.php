@@ -1,19 +1,22 @@
 <?php
 
-namespace Tests\Feature\Api\_01_Product_Crud;
+namespace Tests\Feature\Api\_02_Product_Crud_With_Filter;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\WithFaker;
 use Tests\Feature\Api\BaseProductApiTest;
+use App\Models\Product;
 
 class ProductDestroyTest extends BaseProductApiTest
 {
     use RefreshDatabase, WithFaker;
 
+    protected string $apiVersion = 'v2';
+
     public function test_authenticated_user_can_delete_a_product()
     {
         $this->createAuthenticatedUser();
-        $product = $this->createProduct(); // Define $product here
+        $product = $this->createProduct();
 
         $response = $this->deleteJson($this->getBaseUrl() . '/' . $product->id);
 
@@ -33,7 +36,7 @@ class ProductDestroyTest extends BaseProductApiTest
 
     public function test_unauthenticated_user_cannot_delete_a_product()
     {
-        $product = $this->createProduct(); // Define $product here
+        $product = $this->createProduct();
 
         $response = $this->deleteJson($this->getBaseUrl() . '/' . $product->id);
 

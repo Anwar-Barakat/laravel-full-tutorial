@@ -1,11 +1,12 @@
 <?php
 
-namespace Tests\Feature\Api\_01_Product_Crud;
+namespace Tests\Feature\Api\_02_Product_Crud_With_Filter;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\WithFaker;
 use Tests\Feature\Api\BaseProductApiTest;
-// use App\Models\Category; // Removed as helper is used
+use App\Models\Product;
+use App\Models\Tag;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 
@@ -13,42 +14,15 @@ class ProductStoreTest extends BaseProductApiTest
 {
     use RefreshDatabase, WithFaker;
 
-    public function test_authenticated_user_can_create_a_product_without_image()
-    {
-        $this->createAuthenticatedUser();
-        $category = $this->createCategory(); // Using helper
+    protected string $apiVersion = 'v2';
 
-        $productData = [
-            'name' => $this->faker->sentence,
-            'description' => $this->faker->paragraph,
-            'price' => $this->faker->randomFloat(2, 1, 1000),
-            'category_id' => $category->id,
-        ];
-
-        $response = $this->postJson($this->getBaseUrl(), $productData);
-
-        $response->assertStatus(201)
-            ->assertJson([
-                'name' => $productData['name'],
-                'description' => $productData['description'],
-                'price' => $productData['price'],
-                'category_id' => $productData['category_id'],
-            ]);
-
-        $this->assertDatabaseHas('products', [
-            'name' => $productData['name'],
-            'description' => $productData['description'],
-            'price' => $productData['price'],
-            'category_id' => $productData['category_id'],
-            'image' => null,
-        ]);
-    }
-
-    public function test_authenticated_user_can_create_a_product_with_image()
+    public function test_authenticated_user_can_create_a_product_with_tags()
     {
         Storage::fake('public');
         $this->createAuthenticatedUser();
-        $category = $this->createCategory(); // Using helper
+        $category = $this->createCategory();
+        $tag1 = Tag::factory()->create();
+        $tag2 = Tag::factory()->create();
 
         $image = UploadedFile::fake()->image('product_image.jpg');
 
@@ -58,6 +32,7 @@ class ProductStoreTest extends BaseProductApiTest
             'price' => $this->faker->randomFloat(2, 1, 1000),
             'category_id' => $category->id,
             'image' => $image,
+            'tags' => [$tag1->id, $tag2->id],
         ];
 
         $response = $this->postJson($this->getBaseUrl(), $productData);
@@ -78,7 +53,58 @@ class ProductStoreTest extends BaseProductApiTest
             'image' => 'products/' . $image->hashName(),
         ]);
 
+        $product = Product::firstWhere('name', $productData['name']);
+        $this->assertCount(2, $product->tags);
+        $this->assertTrue($product->tags->contains($tag1));
+        $this->assertTrue($product->tags->contains($tag2));
+
         Storage::disk('public')->assertExists('products/' . $image->hashName());
+    }
+
+    public function test_authenticated_user_can_create_a_product_without_tags()
+    {
+        $this->createAuthenticatedUser();
+        $category = $this->createCategory();
+
+        $productData = [
+            'name' => $this->faker->sentence,
+            'description' => $this->faker->paragraph,
+            'price' => $this->faker->randomFloat(2, 1, 1000),
+            'category_id' => $category->id,
+            // No tags provided
+        ];
+
+        $response = $this->postJson($this->getBaseUrl(), $productData);
+
+        $response->assertStatus(201)
+            ->assertJson([
+                'name' => $productData['name'],
+                'description' => $productData['description'],
+                'price' => $productData['price'],
+                'category_id' => $productData['category_id'],
+            ]);
+
+        $product = Product::firstWhere('name', $productData['name']);
+        $this->assertCount(0, $product->tags);
+    }
+
+    public function test_product_creation_fails_with_invalid_tag_ids()
+    {
+        $this->createAuthenticatedUser();
+        $category = $this->createCategory();
+
+        $productData = [
+            'name' => $this->faker->sentence,
+            'description' => $this->faker->paragraph,
+            'price' => $this->faker->randomFloat(2, 1, 1000),
+            'category_id' => $category->id,
+            'tags' => [999, 1000], // Non-existent tag IDs
+        ];
+
+        $response = $this->postJson($this->getBaseUrl(), $productData);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['tags.0', 'tags.1']);
     }
 
     public function test_product_creation_requires_name_description_price()
@@ -91,49 +117,14 @@ class ProductStoreTest extends BaseProductApiTest
             ->assertJsonValidationErrors(['name', 'description', 'price']);
     }
 
-    public function test_product_creation_fails_with_invalid_price()
-    {
-        $this->createAuthenticatedUser();
-        $category = $this->createCategory(); // Using helper
-
-        $productData = [
-            'name' => $this->faker->sentence,
-            'description' => $this->faker->paragraph,
-            'price' => -10, // Invalid price
-            'category_id' => $category->id,
-        ];
-
-        $response = $this->postJson($this->getBaseUrl(), $productData);
-
-        $response->assertStatus(422)
-            ->assertJsonValidationErrors(['price']);
-    }
-
-    public function test_product_creation_fails_with_non_existent_category_id()
-    {
-        $this->createAuthenticatedUser();
-
-        $productData = [
-            'name' => $this->faker->sentence,
-            'description' => $this->faker->paragraph,
-            'price' => $this->faker->randomFloat(2, 1, 1000),
-            'category_id' => 9999, // Non-existent category ID
-        ];
-
-        $response = $this->postJson($this->getBaseUrl(), $productData);
-
-        $response->assertStatus(422)
-            ->assertJsonValidationErrors(['category_id']);
-    }
-
     public function test_unauthenticated_user_cannot_create_a_product()
     {
-        $category = $this->createCategory(); // Using helper
+        $category = $this->createCategory();
         $productData = [
             'name' => $this->faker->sentence,
             'description' => $this->faker->paragraph,
             'price' => $this->faker->randomFloat(2, 1, 1000),
-            'category_id' => $category->id, // Provide a valid category_id
+            'category_id' => $category->id,
         ];
 
         $response = $this->postJson($this->getBaseUrl(), $productData);

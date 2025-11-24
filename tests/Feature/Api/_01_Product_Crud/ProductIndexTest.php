@@ -16,7 +16,7 @@ class ProductIndexTest extends BaseProductApiTest
         $this->createAuthenticatedUser();
         $products = $this->createProducts(3); // Using helper
 
-        $response = $this->getJson('/api/v1/products');
+        $response = $this->getJson($this->getBaseUrl());
 
         $response->assertStatus(200)
             ->assertJsonCount(3)
@@ -46,7 +46,7 @@ class ProductIndexTest extends BaseProductApiTest
     public function test_can_get_empty_products_list()
     {
         $this->createAuthenticatedUser();
-        $response = $this->getJson('/api/v1/products');
+        $response = $this->getJson($this->getBaseUrl());
 
         $response->assertStatus(200)
             ->assertJsonCount(0);
