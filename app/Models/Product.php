@@ -16,6 +16,10 @@ class Product extends Model implements HasMedia
 
     protected $fillable = ['name', 'description', 'price', 'category_id', 'image', 'stock'];
 
+    protected $casts = [
+        'price' => 'decimal:2',
+    ];
+
     public function registerMediaCollections(): void
     {
         $this->addMediaCollection('main_image')->singleFile();

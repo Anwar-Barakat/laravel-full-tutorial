@@ -5,7 +5,7 @@ namespace Tests\Feature\Api\_06_Product_Spatie_Media_Library;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\WithFaker;
 use Tests\Feature\Api\BaseProductApiTest;
-use App\Models\Product;
+use App\Models\Product as ProductModel;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 
@@ -18,6 +18,8 @@ class ProductShowTest extends BaseProductApiTest
     public function test_authenticated_user_can_retrieve_a_single_product_with_media_data()
     {
         Storage::fake('public');
+        config()->set('media-library.queue_conversions_by_default', false);
+
 
         $this->createAuthenticatedUser();
         $product = $this->createProduct();

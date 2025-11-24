@@ -109,9 +109,9 @@ class ProductIndexTest extends BaseProductApiTest
         $response = $this->getJson($this->getBaseUrl() . '?sort=-price');
 
         $response->assertStatus(200)
-            ->assertJsonFragment(['price' => 500.00])
-            ->assertJsonFragment(['price' => 200.00])
-            ->assertJsonFragment(['price' => 100.00])
+            ->assertJsonFragment(['price' => "500.00"])
+            ->assertJsonFragment(['price' => "200.00"])
+            ->assertJsonFragment(['price' => "100.00"])
             ->assertSeeInOrder([500.00, 200.00, 100.00]);
     }
 
