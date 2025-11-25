@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Data;
+namespace App\Data\Order;
 
 use App\Enums\Order\OrderStatusEnum;
 use Spatie\LaravelData\Data;

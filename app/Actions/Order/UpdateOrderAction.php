@@ -2,7 +2,8 @@
 
 namespace App\Actions\Order;
 
-use App\Data\OrderData;
+use App\Data\Order\OrderData;
+use App\Data\OrderItem\OrderItemData;
 use App\Models\Order;
 use App\Models\OrderItem;
 use Illuminate\Support\Facades\DB;
