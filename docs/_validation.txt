@@ -1,0 +1,20 @@
+
+01. What is validation in Laravel?
+
+🟣 Validation ensures that incoming data meets specific requirements before being processed.
+🟣 Laravel provides multiple validation methods: request validation, form requests, and manual validation.
+🟣 Helps prevent invalid or malicious data from entering the application.
+
+-----------------------------------------
+
+
+02. What are validation rules in Laravel?
+
+🟣 Validation rules can be applied using Form Request classes, the validate() method, or Validator facade.
+🟣 Laravel automatically redirects back with errors when validation fails (for web requests).
+🟣 Some rules accept parameters, such as max:255, unique:users,email, exists:users,id.
+🟣 Laravel supports custom validation rules using php artisan make:rule.
+🟣 Form Request Classes -> Best for large or reusable validations (Big forms, Cleaner controllers)
+🟣 validate() Method -> Quick validation inside controllers, A method available in controllers that validates directly from the request. (Small forms, When you don’t want an extra file)
+
+-----------------------------------------

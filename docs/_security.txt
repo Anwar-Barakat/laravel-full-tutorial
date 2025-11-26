@@ -1,0 +1,21 @@
+01. What is the purpose of the .env file?
+
+🟣 The .env file stores environment-specific configuration values.
+🟣 Contains sensitive information like database credentials, API keys, and app settings.
+🟣 Different .env files can be used for different environments (local, staging, production).
+🟣 Values are accessed using the env() helper function.
+🟣 Should never be committed to version control.
+
+-----------------------------------------
+
+02. What is the config directory used for?
+
+🟣 The config directory contains all configuration files for the application.
+🟣 Files like database.php, app.php, and mail.php store organized configuration settings.
+🟣 Configuration values can be accessed using the config() helper.
+🟣 Example:
+    ▫️ database.php – Database connection settings.
+    ▫️ mail.php – Email service settings.
+    ▫️ filesystems.php – Storage disk configuration (local, S3, etc.).
+
+-----------------------------------------

@@ -1,0 +1,41 @@
+01. What is Laravel?
+
+🟣 Laravel is a free and open-source PHP framework.
+🟣 Created by Taylor Otwell.
+🟣 Follows the MVC (Model–View–Controller) architecture.
+✨ Designed to simplify web development with clean, elegant syntax.
+🛠️ Includes built-in features such as routing, authentication, sessions, and caching.
+
+-----------------------------------------
+
+02. What are the main features of Laravel?
+
+🟣 Eloquent ORM for database operations.
+🟣 Blade templating engine for clean and reusable views.
+🟣 Artisan command-line interface for task automation.
+🟣 Database migration and seeding for easy schema management.
+🟣 Authentication and authorization built-in.
+🟣 Routing system for defining web and API routes.
+🟣 Middleware for request filtering and security.
+🟣 Queue management for background jobs.
+🟣 Task scheduling to automate periodic tasks.
+🟣 Built-in testing support for unit and feature tests.
+
+-----------------------------------------
+
+03. What is Composer and why is it used in Laravel?
+
+🟣 Composer is a dependency management tool for PHP.
+🟣 Laravel uses Composer to manage its dependencies and packages.
+🟣 Allows developers to easily install, update, and autoload libraries required for the application.
+
+-----------------------------------------
+
+04. What is Artisan?
+
+🟣 Artisan is Laravel’s built-in command-line interface used to automate common development tasks.
+🟣 Allows creating controllers, models, and migrations quickly via commands.
+🟣 Supports running tests from the command line.
+🟣 Example: php artisan make:controller UserController
+
+-----------------------------------------
