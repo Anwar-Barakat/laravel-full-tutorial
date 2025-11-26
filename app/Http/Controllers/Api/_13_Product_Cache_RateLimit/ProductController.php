@@ -7,7 +7,8 @@ use Illuminate\Http\Request;
 use App\Models\Product;
 use App\Http\Traits\ApiResponseTrait;
 use App\Http\Resources\ProductResource;
-use App\Data\ProductData;
+use App\Data\Product\StoreProductData;
+use App\Data\Product\UpdateProductData;
 
 // Import Actions
 use App\Actions\Product\GetAllProductsAction;
@@ -36,22 +37,20 @@ class ProductController extends Controller
         return $this->successResponse(ProductResource::collection($products), 'Products retrieved successfully.');
     }
 
-    public function store(ProductData $productData, CreateProductAction $action)
+    public function store(StoreProductData $productData, CreateProductAction $action)
     {
         $this->authorize('create', Product::class);
 
         $product = $action->execute($productData);
 
         // Invalidate cache for all products after creation
-        Cache::forget('products_all_*'); // More specific invalidation needed, but for now flush all product caches
+        Cache::flush(); // More specific invalidation needed, but for now flush all product caches
 
         return $this->successResponse(new ProductResource($product), 'Product created successfully.', 201);
     }
 
     public function show(string $id, FindProductAction $action)
     {
-        $this->authorize('view', Product::class); // Authorize view any or specific product
-
         $cacheKey = 'product_' . $id;
 
         $product = Cache::remember($cacheKey, 60, function () use ($action, $id) {
@@ -62,10 +61,12 @@ class ProductController extends Controller
             return $this->notFoundResponse('Product not found.');
         }
 
+        $this->authorize('view', $product);
+
         return $this->successResponse(new ProductResource($product), 'Product retrieved successfully.');
     }
 
-    public function update(ProductData $productData, string $id, UpdateProductAction $action, FindProductAction $findProductAction)
+    public function update(UpdateProductData $productData, string $id, UpdateProductAction $action, FindProductAction $findProductAction)
     {
         $product = $findProductAction->execute($id);
 
@@ -79,7 +80,7 @@ class ProductController extends Controller
 
         // Invalidate cache for specific product and all products list
         Cache::forget('product_' . $id);
-        Cache::forget('products_all_*');
+        Cache::flush();
 
         return $this->successResponse(new ProductResource($product), 'Product updated successfully.');
     }
@@ -98,7 +99,7 @@ class ProductController extends Controller
 
         // Invalidate cache for specific product and all products list
         Cache::forget('product_' . $id);
-        Cache::forget('products_all_*');
+        Cache::flush();
 
         return $this->successResponse(null, 'Product deleted successfully.', 204);
     }

@@ -4,7 +4,7 @@ namespace App\Actions\Product;
 
 use App\Models\Product;
 use Illuminate\Support\Facades\DB;
-use App\Data\ProductData;
+use App\Data\Product\StoreProductData;
 use App\Jobs\SendNewProductNotification;
 use Illuminate\Http\UploadedFile;
 use App\Services\Media\SpatieMediaUploadService;
@@ -17,17 +17,11 @@ class CreateProductAction
         protected DefaultStorageUploadService $defaultStorageUploadService
     ) {}
 
-    public function execute(ProductData $productData): Product
+    public function execute(StoreProductData $productData): Product
     {
         return DB::transaction(function () use ($productData) {
-            $product = Product::create($productData->except('image', 'main_image', 'gallery_images', 'tags')->toArray());
-
-            if ($productData->image instanceof UploadedFile) {
-                $imagePath = $this->defaultStorageUploadService->upload($productData->image, 'products', 'public');
-                $product->image = $imagePath;
-                $product->save();
-            }
-
+            $product = Product::create($productData->except('main_image', 'gallery_images', 'tags')->toArray());
+            
             if ($productData->main_image instanceof UploadedFile) {
                 $this->spatieMediaUploadService->upload($product, $productData->main_image, 'main_image');
             }

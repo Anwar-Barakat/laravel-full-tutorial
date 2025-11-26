@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Order;
 use App\Http\Traits\ApiResponseTrait;
-use App\Data\OrderData;
+use App\Data\Order\OrderData;
 use App\Http\Resources\OrderResource;
 
 use App\Actions\Order\GetAllOrdersAction;

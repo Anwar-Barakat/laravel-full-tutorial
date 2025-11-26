@@ -7,7 +7,8 @@ use Illuminate\Http\Request;
 use App\Models\Product;
 use App\Http\Traits\ApiResponseTrait;
 use App\Http\Resources\ProductResource;
-use App\Data\ProductData;
+use App\Data\Product\StoreProductData;
+use App\Data\Product\UpdateProductData;
 
 use App\Actions\Product\GetAllProductsAction;
 use App\Actions\Product\FindProductAction;
@@ -28,7 +29,7 @@ class ProductController extends Controller
         return $this->successResponse(ProductResource::collection($products), 'Products retrieved successfully.');
     }
 
-    public function store(ProductData $productData, CreateProductAction $action)
+    public function store(StoreProductData $productData, CreateProductAction $action)
     {
         $this->authorize('create', Product::class);
 
@@ -50,7 +51,7 @@ class ProductController extends Controller
         return $this->successResponse(new ProductResource($product), 'Product retrieved successfully.');
     }
 
-    public function update(ProductData $productData, string $id, UpdateProductAction $action, FindProductAction $findProductAction)
+    public function update(UpdateProductData $productData, string $id, UpdateProductAction $action, FindProductAction $findProductAction)
     {
         $product = $findProductAction->execute($id);
 
