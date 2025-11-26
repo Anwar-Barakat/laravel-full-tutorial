@@ -19,6 +19,7 @@ class OrderData extends Data
         public ?string $billing_address,
         public string $payment_method,
         /** @var \App\Data\OrderItem\OrderItemData[] */
+        /** @var DataCollection<OrderItemData> */
         public DataCollection $order_items,
     ) {}
 
@@ -33,7 +34,9 @@ class OrderData extends Data
             'billing_address'   => ['nullable', 'string'],
             'payment_method'    => ['required', 'string'],
             'order_items'       => ['required', 'array', 'min:1'],
-            'order_items.*'     => ['required', 'array'],
+            'order_items.*.product_id' => ['required', 'integer', 'exists:products,id'],
+            'order_items.*.quantity' => ['required', 'integer', 'min:1'],
+            'order_items.*.price' => ['required', 'numeric', 'min:0'],
         ];
     }
 }

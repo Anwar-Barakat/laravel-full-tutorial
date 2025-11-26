@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\_18_Order_CRUD_With_Notification;
 
+use App\Data\Order\UpdateOrderData;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Order;
@@ -54,7 +55,7 @@ class OrderNotificationController extends Controller
         return $this->successResponse(new OrderResource($order), 'Order retrieved successfully.');
     }
 
-    public function update(OrderData $orderData, string $id, UpdateOrderAction $action, FindOrderAction $findOrderAction)
+    public function update(UpdateOrderData $orderData, string $id, UpdateOrderAction $action, FindOrderAction $findOrderAction)
     {
         $order = $findOrderAction->execute($id);
 

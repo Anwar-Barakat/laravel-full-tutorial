@@ -7,8 +7,9 @@ use Maatwebsite\Excel\Facades\Excel;
 use App\Exports\Order\OrderExportFromView;
 use App\Models\Order;
 use Illuminate\Http\Request;
-use Symfony\Component\HttpFoundation\BinaryFileResponse;
-use Barryvdh\DomPDF\Facade\Pdf;
+use Symfony\Component\HttpFoundation\BinaryFileResponse; // Add this line
+use Barryvdh\DomPDF\Facade\Pdf; // Add this line
+use Illuminate\Http\Response;
 
 class OrderExportPdfController extends Controller
 {
@@ -18,7 +19,7 @@ class OrderExportPdfController extends Controller
         return Excel::download(new OrderExportFromView, 'orders_from_view.pdf', \Maatwebsite\Excel\Excel::DOMPDF);
     }
 
-    public function exportDirectPdf(): BinaryFileResponse
+    public function exportDirectPdf(): Response
     {
         $this->authorize('export', Order::class); // Assuming 'export' permission
         $orders = Order::with('user')->get();
