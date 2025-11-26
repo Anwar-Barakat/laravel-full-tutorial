@@ -9,7 +9,7 @@ class FindOrderAction
 {
     use AsAction;
 
-    public function handle(string $id): ?Order
+    public function execute(string $id): ?Order
     {
         return Order::with(['user', 'orderItems.product'])->find($id);
     }

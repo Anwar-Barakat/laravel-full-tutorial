@@ -145,12 +145,12 @@ Route::prefix('v13')->middleware(['throttle:60,1', 'auth:sanctum'])->group(funct
 });
 
 // _14_Order_CRUD
-Route::prefix('v14')->group(function () {
+Route::prefix('v14')->middleware(['auth:sanctum'])->group(function () {
     Route::apiResource('orders', OrderController::class);
 });
 
 // _15_Order_Export_Excel
-Route::prefix('v15')->group(function () {
+Route::prefix('v15')->middleware(['auth:sanctum'])->group(function () {
     Route::prefix('orders-exports')->group(function () {
         Route::get('basic', [OrderExportController::class, 'exportBasic']);
         Route::get('custom-query', [OrderExportController::class, 'exportCustomQuery']);
@@ -165,7 +165,7 @@ Route::prefix('v15')->group(function () {
 });
 
 // _16_Order_Import_Excel
-Route::prefix('v16')->group(function () {
+Route::prefix('v16')->middleware(['auth:sanctum'])->group(function () {
     Route::prefix('orders-imports')->group(function () {
         Route::post('/', [OrderImportController::class, 'import']);
     });

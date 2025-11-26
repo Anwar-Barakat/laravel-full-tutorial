@@ -1,0 +1,49 @@
+01. What is a migration in Laravel?
+
+🟣 Migrations act as version control for your database schema.
+🟣 They allow teams to define, modify, and share the database structure.
+🟣 You can create, update, or drop tables and columns using migration files.
+🟣 Help keep database changes consistent across different environments.
+🟣 Example:
+php artisan make:migration create_users_table
+
+-----------------------------------------
+
+02. What is Eloquent ORM?
+
+🟣 Eloquent is Laravel’s Object-Relational Mapping (ORM) system.
+🟣 Provides an elegant way for interacting with the database.
+🟣 Each database table has a corresponding Model that represents and interacts with that table.
+🟣 Makes querying and manipulating data clean, readable, and expressive.
+
+-----------------------------------------
+
+03. What is the difference between get() and first() in Eloquent?
+
+🟣 get(): Returns a collection containing all matching records.
+🟣 first(): Returns only the first matching record as a single model instance (or null if none is found).
+
+-----------------------------------------
+
+04. What is the difference between all() and get()?
+
+🟣 all(): Static method that retrieves all records directly from the table.
+🟣 get(): Can be chained with query builder methods to filter results before retrieving.
+
+-----------------------------------------
+
+05. What is a database seeder?
+
+🟣 A database seeder is used to insert initial, demo, or default data into your database.
+🟣 Seeders help quickly set up testing or development environments without manual data entry.
+🟣 Seeders are commonly combined with model factories to generate large amounts of fake data.
+
+-----------------------------------------
+
+06. What are factories in Laravel?
+
+🟣 Factories generate fake or dummy data for Eloquent models — useful especially for testing and seeding.
+🟣 They use the Faker library to automatically generate realistic values (names, emails, text, dates, etc.).
+🟣 They speed up development by automatically generating data rather than manually inserting records.
+
+-----------------------------------------

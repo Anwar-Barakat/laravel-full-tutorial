@@ -11,7 +11,7 @@ class GetAllOrdersAction
 {
     use AsAction;
 
-    public function handle(array $queryParameters = []): \Illuminate\Contracts\Pagination\LengthAwarePaginator
+    public function execute(array $queryParameters = []): \Illuminate\Contracts\Pagination\LengthAwarePaginator
     {
         return QueryBuilder::for(Order::class)
             ->allowedFilters([

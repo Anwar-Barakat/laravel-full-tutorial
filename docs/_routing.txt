@@ -1,0 +1,26 @@
+01. What is routing in Laravel?
+
+🟣 Routing defines how the application responds to incoming HTTP requests.
+🟣 Routes are defined inside the routes/web.php (web routes) and routes/api.php (API routes) files.
+🟣 Each route maps a URL to a controller method, closure, or action.
+🟣 Each route hits a controller method, action, or closure.
+
+-----------------------------------------
+
+02. What are named routes in Laravel?
+
+🟣 Named routes allow you to assign a name to a route for easier reference.
+🟣 Makes it easier to generate URLs and redirects without hardcoding paths.
+🟣 Can be referenced throughout the application using the route() helper.
+🟣 Example:
+    ▫️ Route::get('/profile', [ProfileController::class, 'show'])->name('profile');
+    ▫️ Usage: route('profile')
+
+-----------------------------------------
+
+03. What is the difference between Route::get() and Route::post()?
+
+🟣 Route::get(): Handles HTTP GET requests (used for retrieving or displaying data).
+🟣 Route::post(): Handles HTTP POST requests (used for submitting or creating data).
+
+-----------------------------------------

@@ -22,6 +22,16 @@ abstract class BasePermissionTest extends BaseProductApiTest
         Permission::findOrCreate('create products');
         Permission::findOrCreate('edit products');
         Permission::findOrCreate('delete products');
+
+        Permission::findOrCreate('view-order');
+        Permission::findOrCreate('view-any-order');
+        Permission::findOrCreate('create-order');
+        Permission::findOrCreate('update-order');
+        Permission::findOrCreate('delete-order');
+        Permission::findOrCreate('export orders');
+        Permission::findOrCreate('import orders');
+        Permission::findOrCreate('restore-order');
+        Permission::findOrCreate('force-delete-order');
     }
 
     protected function createAdminUser(): User
