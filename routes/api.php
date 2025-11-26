@@ -135,7 +135,7 @@ Route::prefix('v11')->middleware(['auth:sanctum'])->group(function () {
 });
 
 // _12_Product_Action_Layer_With_Spatie_DTO
-Route::prefix('v12')->group(function () {
+Route::prefix('v12')->middleware(['auth:sanctum'])->group(function () {
     Route::apiResource('products', ProductControllerV12::class);
 });
 

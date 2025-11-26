@@ -14,6 +14,10 @@ class DeleteProductAction
             if ($product->image) {
                 Storage::disk('public')->delete($product->image);
             }
+            // Delete all media associated with the product
+            $product->clearMediaCollection('main_image');
+            $product->clearMediaCollection('gallery_images');
+
             return $product->delete();
         });
     }
