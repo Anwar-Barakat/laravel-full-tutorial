@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\Api\_22_Product_Job_Queue;
 
 use App\Http\Controllers\Controller;
-use App\Data\ProductData;
+use App\Data\Product\ProductData;
 use App\Http\Resources\ProductResource;
 use App\Jobs\SendNewProductNotification;
 use App\Models\Product;

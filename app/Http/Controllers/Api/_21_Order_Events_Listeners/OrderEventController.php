@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\Api\_21_Order_Events_Listeners;
 
 use App\Actions\Order\CreateOrderAction;
-use App\Data\OrderData;
+use App\Data\Order\OrderData;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\OrderResource;
 use App\Http\Traits\ApiResponseTrait;

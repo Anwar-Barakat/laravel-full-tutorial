@@ -38,7 +38,7 @@ class ProductIndexTest extends BaseProductApiTest
             $response->assertJsonFragment([
                 'name' => $product->name,
                 'description' => $product->description,
-                'price' => $product->price,
+                'price' => (string) $product->price, // Cast price to string
             ]);
         }
     }

@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Api\_20_Order_Stripe_Payment_Intent;
 use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Http\Traits\ApiResponseTrait;
-use App\Data\OrderData;
+use App\Data\Order\OrderData;
 use App\Actions\Order\CreateOrderAction;
 use App\Http\Resources\OrderResource;
 use Illuminate\Http\JsonResponse;

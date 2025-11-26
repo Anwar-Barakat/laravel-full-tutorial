@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Api\_19_Stripe_Checkout_Payments;
 use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Http\Traits\ApiResponseTrait;
-use App\Data\OrderData;
+use App\Data\Order\OrderData;
 use App\Actions\Order\CreateOrderAction;
 use App\Http\Resources\OrderResource;
 use Illuminate\Http\JsonResponse;
