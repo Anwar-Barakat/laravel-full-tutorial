@@ -2,33 +2,24 @@
 
 namespace App\Actions\Order;
 
-use App\Data\Order\OrderData;
+use App\Data\Order\UpdateOrderData;
 use App\Data\OrderItem\OrderItemData;
 use App\Models\Order;
 use App\Models\OrderItem;
 use Illuminate\Support\Facades\DB;
 use Lorisleiva\Actions\Concerns\AsAction;
+use Spatie\LaravelData\Optional;
 
 class UpdateOrderAction
 {
     use AsAction;
 
-    public function handle(Order $order, OrderData $orderData): Order
+    public function execute(Order $order, UpdateOrderData $orderData): Order
     {
         return DB::transaction(function () use ($order, $orderData) {
-            $order->update([
-                'user_id' => $orderData->user_id ?? $order->user_id,
-                'slug' => $orderData->slug ?? $order->slug, // Update slug if provided in DTO
-                'total_amount' => $orderData->total_amount ?? $order->total_amount,
-                'status' => $orderData->status ?? $order->status,
-                'shipping_address' => $orderData->shipping_address ?? $order->shipping_address,
-                'billing_address' => $orderData->billing_address ?? $order->billing_address,
-                'payment_method' => $orderData->payment_method ?? $order->payment_method,
-            ]);
+            $order->update($orderData->except('order_items')->toArray());
 
-            // Simple update for order items: delete all existing and re-create.
-            // More complex logic (diffing, partial updates) could be added here.
-            if ($orderData->order_items) {
+            if (!$orderData->order_items instanceof Optional) {
                 $order->orderItems()->delete();
                 foreach ($orderData->order_items as $orderItemData) {
                     OrderItem::create([

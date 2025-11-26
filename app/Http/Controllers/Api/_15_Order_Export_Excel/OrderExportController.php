@@ -49,7 +49,7 @@ class OrderExportController extends Controller
     public function exportLargeData(): JsonResponse
     {
         $this->authorize('export', Order::class);
-        (new OrderExportLargeData)->queue('orders_large.xlsx');
+        Excel::queue(new OrderExportLargeData, 'orders_large.xlsx');
         return response()->json(['message' => 'Order export started in the background. You will be notified when it\'s ready.'], 202);
     }
 

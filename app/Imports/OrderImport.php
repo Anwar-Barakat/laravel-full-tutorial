@@ -13,16 +13,25 @@ use Illuminate\Validation\Rule;
 use Maatwebsite\Excel\Concerns\ToModel;
 use Maatwebsite\Excel\Concerns\WithHeadingRow;
 use Maatwebsite\Excel\Concerns\WithValidation;
-use Maatwebsite\Excel\Concerns\SkipsOnError;
-use Maatwebsite\Excel\Concerns\SkipsErrors;
-use Maatwebsite\Excel\Concerns\SkipsOnFailure;
-use Maatwebsite\Excel\Concerns\SkipsFailures;
 use Maatwebsite\Excel\Concerns\WithChunkReading;
-use Illuminate\Contracts\Queue\ShouldQueue;
+use Maatwebsite\Excel\Concerns\Importable;
+use Maatwebsite\Excel\Concerns\SkipsOnFailure;
+use Maatwebsite\Excel\Validators\Failure;
 
-class OrderImport implements ToModel, WithHeadingRow, WithValidation, SkipsOnError, SkipsOnFailure, WithChunkReading, ShouldQueue
+class OrderImport implements ToModel, WithHeadingRow, WithValidation, WithChunkReading, SkipsOnFailure
 {
-    use SkipsErrors, SkipsFailures;
+    use Importable;
+
+    public $failures = [];
+
+    public function onFailure(Failure ...$failures)
+    {
+        // Handle the failures how you'd like.
+        // For example, you can collect them in a property
+        foreach ($failures as $failure) {
+            $this->failures[] = $failure;
+        }
+    }
 
     /**
      * Map each Excel row to models.
@@ -83,6 +92,7 @@ class OrderImport implements ToModel, WithHeadingRow, WithValidation, SkipsOnErr
 
             return $order;
         });
+        // });
     }
 
     /**

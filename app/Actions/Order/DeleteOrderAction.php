@@ -9,7 +9,7 @@ class DeleteOrderAction
 {
     use AsAction;
 
-    public function handle(Order $order): bool
+    public function execute(Order $order): bool
     {
         return $order->delete();
     }

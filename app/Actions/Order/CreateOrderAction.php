@@ -13,7 +13,7 @@ class CreateOrderAction
 {
     use AsAction;
 
-    public function handle(OrderData $orderData): Order
+    public function execute(OrderData $orderData): Order
     {
         return DB::transaction(function () use ($orderData) {
 

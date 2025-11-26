@@ -14,6 +14,7 @@ use App\Models\User; // Re-added
 class RegisterTest extends BaseUserApiTest
 {
     use RefreshDatabase, WithFaker;
+    protected bool $seed = false;
 
     public function test_a_user_can_register_successfully()
     {
