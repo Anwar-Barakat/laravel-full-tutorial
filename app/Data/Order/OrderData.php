@@ -11,11 +11,13 @@ class OrderData extends Data
 {
     public function __construct(
         public ?int $user_id,
+        // public ?string $slug, // Remove slug from constructor
         public float $total_amount,
         public ?OrderStatusEnum $status,
         public ?string $shipping_address,
         public ?string $billing_address,
         public string $payment_method,
+        /** @var \App\Data\OrderItemData[] */
         public DataCollection $order_items,
     ) {}
 

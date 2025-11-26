@@ -8,7 +8,8 @@ use App\Models\Product;
 use App\Http\Traits\ApiResponseTrait;
 use App\Http\Resources\ProductResource;
 use App\Services\_11_Product_Service_Layer_With_Spatie_DTO\ProductService;
-use App\Data\Product\ProductData;
+use App\Data\Product\StoreProductData;
+use App\Data\Product\UpdateProductData;
 
 class ProductController extends Controller
 {
@@ -30,7 +31,7 @@ class ProductController extends Controller
         return $this->successResponse(ProductResource::collection($products), 'Products retrieved successfully.');
     }
 
-    public function store(ProductData $productData)
+    public function store(StoreProductData $productData)
     {
         $this->authorize('create', Product::class);
 
@@ -52,7 +53,7 @@ class ProductController extends Controller
         return $this->successResponse(new ProductResource($product), 'Product retrieved successfully.');
     }
 
-    public function update(ProductData $productData, string $id)
+    public function update(UpdateProductData $productData, string $id)
     {
         $product = $this->productService->findProduct($id);
 

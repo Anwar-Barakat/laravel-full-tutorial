@@ -5,7 +5,8 @@ namespace App\Actions\Product;
 use App\Models\Product;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use App\Data\Product\ProductData;
+use App\Data\Product\UpdateProductData;
+use Spatie\LaravelData\Optional;
 use Illuminate\Http\UploadedFile;
 use App\Services\Media\SpatieMediaUploadService;
 use App\Services\Media\DefaultStorageUploadService;
@@ -17,43 +18,19 @@ class UpdateProductAction
         protected DefaultStorageUploadService $defaultStorageUploadService
     ) {}
 
-    public function execute(Product $product, ProductData $productData): Product
+    public function execute(Product $product, UpdateProductData $productData): Product
     {
         return DB::transaction(function () use ($product, $productData) {
-            $updateData = [
-                'name' => $productData->name,
-                'description' => $productData->description,
-                'price' => $productData->price,
-                'stock' => $productData->stock,
-                'category_id' => $productData->category_id,
-            ];
-
-            // Handle the 'image' field specifically
-            if ($productData->image instanceof UploadedFile) {
-                if ($product->image) {
-                    $this->defaultStorageUploadService->delete($product->image);
-                }
-                $imagePath = $this->defaultStorageUploadService->upload($productData->image, 'products', 'public');
-                $updateData['image'] = $imagePath;
-            } else if ($productData->image === null && isset($productData->image)) {
-                // If 'image' was explicitly sent as null in the request
-                if ($product->image) {
-                    $this->defaultStorageUploadService->delete($product->image);
-                }
-                $updateData['image'] = null;
-            }
-            // If productData->image is not provided in the request at all, it would be null,
-            // and its value in $updateData would not be explicitly set. This is desired.
-
-
+            $updateData = $productData->except('main_image', 'gallery_images', 'delete_gallery_images', 'tags')->toArray();
+            
             $product->update($updateData);
 
-            if ($productData->main_image instanceof UploadedFile) {
+            if (!$productData->main_image instanceof Optional && $productData->main_image) {
                 $product->clearMediaCollection('main_image');
                 $this->spatieMediaUploadService->upload($product, $productData->main_image, 'main_image');
             }
 
-            if ($productData->gallery_images) {
+            if (!$productData->gallery_images instanceof Optional && $productData->gallery_images) {
                 foreach ($productData->gallery_images as $galleryImage) {
                     if ($galleryImage instanceof UploadedFile) {
                         $this->spatieMediaUploadService->upload($product, $galleryImage, 'gallery_images');
@@ -61,14 +38,14 @@ class UpdateProductAction
                 }
             }
 
-            if ($productData->delete_gallery_images) {
+            if (!$productData->delete_gallery_images instanceof Optional && $productData->delete_gallery_images) {
                 foreach ($productData->delete_gallery_images as $mediaId) {
                     $product->deleteMedia($mediaId);
                 }
                 $product->load('media'); // Reload media relationships
             }
 
-            if ($productData->tags !== null) {
+            if (!$productData->tags instanceof Optional) {
                 $product->tags()->sync($productData->tags);
             }
 
