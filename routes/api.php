@@ -178,8 +178,8 @@ Route::prefix('v17')->group(function () {
 });
 
 // _18_Order_CRUD_With_Notification
-Route::prefix('v18')->group(function () {
-    Route::apiResource('orders-with-notifications', OrderNotificationController::class);
+Route::prefix('v18')->middleware(['auth:sanctum'])->group(function () {
+    Route::apiResource('orders', OrderNotificationController::class);
 });
 
 // _19_Stripe_Checkout_Payments
