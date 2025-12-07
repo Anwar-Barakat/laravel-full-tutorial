@@ -19,3 +19,120 @@
     ▫️ filesystems.php – Storage disk configuration (local, S3, etc.).
 
 -----------------------------------------
+
+03. What is the DDoS Attacks
+
+🟣 A DDoS attack (Distributed Denial of Service) is when a website or online service gets flooded with too much fake traffic all at once, so it slows down or stops working for real users.
+🟣 Imagine a store with hundreds of fake customers blocking the entrance. Real customers can’t get in.
+🟣 Hackers use many computers or devices (sometimes thousands) to send these fake requests at the same time.
+🟣 The goal is usually to make a website crash or disrupt its normal operation.
+🟣 Solution:
+    ▫️ Use a DDoS protection service (like Cloudflare or AWS Shield)
+    ▫️ Increase server capacity
+    ▫️ Rate limiting
+    ▫️ CDNs that having many branches so no single store gets crowded
+
+-----------------------------------------
+
+04. What is CSRF protection?
+
+🟣 CSRF (Cross-Site Request Forgery) protection prevents unauthorized commands.
+🟣 Laravel automatically generates a CSRF token for each user session.
+🟣 Forms must include the @csrf directive or _token field in Blade templates.
+🟣 Validates that the request comes from your application.
+
+-----------------------------------------
+
+05. How Laravel handles CSRF in SPAs (React, Inertia, Next.js) ?
+
+🟣 Since SPAs don’t use Blade forms, Laravel relies on cookies + headers instead of the @csrf directive.
+🟣 XSRF-TOKEN cookie
+    ▫️ Laravel sends a cookie named XSRF-TOKEN to the browser (usually via /sanctum/csrf-cookie).
+    ▫️ This cookie contains the CSRF token.
+    ▫️ Purpose: the frontend reads this token to include it in requests.
+🟣 X-XSRF-TOKEN header
+    ▫️ For POST, PUT, DELETE requests, the frontend sends the CSRF token from the cookie in the X-XSRF-TOKEN header.
+    ▫️ Purpose: Laravel verifies the request comes from your own app and not an attacker.
+    ▫️ Note: This is commonly used with Laravel Sanctum for SPA authentication.
+
+-----------------------------------------
+
+06. What is the @csrf directive?
+
+🟣 The @csrf directive generates a hidden CSRF token field in forms.
+🟣 Required for all POST, PUT, PATCH, DELETE requests.
+🟣 Laravel automatically validates this token.
+
+-----------------------------------------
+
+06. What are Laravel policies?
+
+🟣 Policies are classes that contain authorization logic for a specific Eloquent model.
+🟣 A Policy decides what a user is allowed or not allowed to do with a model.
+
+-----------------------------------------
+
+07. What is the difference between gates and policies?
+
+🟣 Gates: Simple closure-based authorization checks.
+🟣 Policies: Class-based authorization organized around models.
+🟣 Gates are good for simple actions not related to models.
+🟣 Policies are better for model-specific authorization.
+🟣 Use the authorize() method in controllers.
+🟣 Use the @can directive in Blade templates.
+🟣 Use the can() method on user instances.
+
+-----------------------------------------
+
+08. What is Laravel Sanctum?
+
+🟣 Sanctum provides a lightweight authentication system for SPAs and mobile apps.
+🟣 Simpler alternative to Passport for most applications.
+🟣 Example: $token = $user->createToken('token-name')->plainTextToken;
+
+-----------------------------------------
+
+09. What is Laravel Passport?
+
+🟣 Passport is a full OAuth2 server implementation.
+🟣 Provides complete OAuth2 authorization with tokens, scopes, and grants.
+🟣 Both (Sanctum & Passport) are used for API authentication, but they are designed for different purposes.
+🟣 Sanctum
+    ▫️ Designed for simple APIs, SPAs (React/Vue/Next.js), and mobile apps
+    ▫️ Much easier to set up
+    ▫️ Uses lightweight tokens
+🟣 Sanctum
+    ▫️ Full OAuth2 implementation
+    ▫️ like Google, Facebook, or GitHub have OAuth servers
+
+-----------------------------------------
+
+10. What are API resources?
+
+🟣 API resources transform models and collections into JSON responses.
+🟣 Provide a transformation layer between models and JSON.
+
+-----------------------------------------
+
+11. What is the difference between Resource and ResourceCollection?
+
+🟣 Resource: Transforms a single model into JSON.
+🟣 ResourceCollection: Transforms a collection of models into JSON.
+🟣 ResourceCollection allows customizing the collection wrapper and meta data.
+
+-----------------------------------------
+
+. How do you secure a Laravel application?
+
+
+🟣 Keep Laravel and dependencies updated
+🟣 Use HTTPS
+🟣 Implement CSRF protection
+🟣 Validate and sanitize input
+🟣 Implement proper authentication and authorization
+🟣 Protect against SQL injection, XSS
+🟣 Use environment variables for sensitive data
+🟣 Enable rate limiting
+🟣 Implement proper error handling
+
+-----------------------------------------

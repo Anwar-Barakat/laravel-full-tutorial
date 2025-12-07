@@ -62,3 +62,67 @@
     ▫️ Including sub-views using @include.
 
 -----------------------------------------
+
+08. What are views in Laravel?
+
+🟣 Views contain the HTML and presentation logic of the application.
+🟣 Located in the resources/views directory.
+🟣 Use the .blade.php extension when using Blade templating.
+🟣 Returned from controllers using the view() helper function.
+🟣 Data can be passed to views as an associative array in the view() helper.
+🟣 You can also use the with() method to pass individual variables.
+🟣 compact(): Creates an associative array from existing variables and their values.
+
+-----------------------------------------
+
+09. What are Accessors in Laravel?
+
+🟣 Each Eloquent model has attributes.
+🟣 Accessors allow you to transform these attributes when you read them.
+🟣 But accessors also let you create new virtual attributes that do not exist in the database.
+🟣 They do not change what’s stored in the database — only how the value appears when accessed.
+🟣 In modern Laravel (+10), accessors use the Attribute class instead of the old getSomethingAttribute method.
+🟣 You can apply any transformation you want:
+    ▫️ Formatting names, Formatting dates, Adding computed values, Changing number formats, Creating virtual attributes.
+
+-----------------------------------------
+
+10. What is the difference between accessors and mutators?
+
+🟣 Accessors:
+    ▫️ Transform attribute values when reading them from the database.
+    ▫️ Used to format or modify data before it is returned.
+
+🟣 Mutators:
+    ▫️ Transform attribute values when writing/saving them to the database.
+    ▫️ Used to clean, format, or secure data before storage.
+
+-----------------------------------------
+
+11. What are query scopes?
+
+🟣 Query scopes allow you to define reusable query in your Eloquent models.
+🟣 They make queries more readable and maintainable by encapsulating common conditions.
+🟣 Two types: Local Scopes and Global Scopes.
+    ▫️ Local scopes are optional and called manually.
+    ▫️ Global scopes are automatically applied to all queries.
+    ▫️ Global scopes can be defined once and applied to multiple models to avoid repeating query logic.
+
+-----------------------------------------
+
+12. What is soft deleting?
+
+🟣 Soft deleting marks records as deleted without physically removing them from the database.
+🟣 Adds a deleted_at timestamp to indicate deletion instead of removing the row.
+🟣 Soft deleted records are automatically excluded from normal queries.
+🟣 Records can be restored later if needed.
+
+-----------------------------------------
+
+13. How do you include soft deleted records in queries?
+
+🟣 Use the withTrashed() method to include both active and soft deleted records in the query.
+🟣 Use onlyTrashed() to retrieve only soft deleted records.
+
+
+-----------------------------------------

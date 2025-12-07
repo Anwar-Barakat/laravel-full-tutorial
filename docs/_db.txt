@@ -4,8 +4,7 @@
 🟣 They allow teams to define, modify, and share the database structure.
 🟣 You can create, update, or drop tables and columns using migration files.
 🟣 Help keep database changes consistent across different environments.
-🟣 Example:
-php artisan make:migration create_users_table
+🟣 Example: php artisan make:migration create_users_table
 
 -----------------------------------------
 
@@ -18,21 +17,7 @@ php artisan make:migration create_users_table
 
 -----------------------------------------
 
-03. What is the difference between get() and first() in Eloquent?
-
-🟣 get(): Returns a collection containing all matching records.
-🟣 first(): Returns only the first matching record as a single model instance (or null if none is found).
-
------------------------------------------
-
-04. What is the difference between all() and get()?
-
-🟣 all(): Static method that retrieves all records directly from the table.
-🟣 get(): Can be chained with query builder methods to filter results before retrieving.
-
------------------------------------------
-
-05. What is a database seeder?
+03. What is a database seeder?
 
 🟣 A database seeder is used to insert initial, demo, or default data into your database.
 🟣 Seeders help quickly set up testing or development environments without manual data entry.
@@ -40,10 +25,235 @@ php artisan make:migration create_users_table
 
 -----------------------------------------
 
-06. What are factories in Laravel?
+04. What are factories in Laravel?
 
 🟣 Factories generate fake or dummy data for Eloquent models — useful especially for testing and seeding.
 🟣 They use the Faker library to automatically generate realistic values (names, emails, text, dates, etc.).
 🟣 They speed up development by automatically generating data rather than manually inserting records.
+
+-----------------------------------------
+
+05. What are Eloquent relationships?
+
+🟣 Define how database tables are related to each other. (Simplify tables relations)
+🟣 Laravel supports multiple relationship types.
+
+-----------------------------------------
+
+06. Explain One-to-One relationship
+
+🟣 One record in a table is associated with one record in another table.
+🟣 Uses hasOne() and belongsTo() methods in models.
+🟣 Example real-life: A User has one Profile.
+
+-----------------------------------------
+
+07. Explain One-to-One relationship
+
+🟣 One record in a table is associated with one record in another table.
+🟣 Uses hasOne() and belongsTo() methods in models.
+🟣 Example real-life: A User has one Profile.
+
+-----------------------------------------
+
+08. Explain One-to-Many relationship
+
+🟣 One record in a table is associated with multiple records in another table.
+🟣 Uses hasMany() and belongsTo() methods in models.
+🟣 Example real-life: A User has many Posts.
+
+-----------------------------------------
+
+09. Explain Many-to-Many relationship
+
+🟣 Multiple records in one table are associated with multiple records in another table.
+🟣 Requires a pivot (junction) table to store the relationships.
+🟣 Uses belongsToMany() method on both models.
+🟣 Example real-life: Users can have many Roles, and Roles can have many Users.
+
+-----------------------------------------
+
+10. Explain Has-Many-Through relationship
+
+🟣 Allows accessing records in a distant table through an intermediate table.
+🟣 Useful for relationships where a model is related to another via a third model.
+🟣 Uses hasManyThrough() method.
+🟣 Example real-life: A Country has many Posts through Users (Country → Users → Posts).
+
+-----------------------------------------
+
+11. Explain Has-Many-Through relationship
+
+🟣 Allows accessing records in a distant table through an intermediate table.
+🟣 Useful for relationships where a model is related to another via a third model.
+🟣 Uses hasManyThrough() method.
+🟣 Example real-life: A Country has many Posts through Users (Country → Users → Posts).
+
+-----------------------------------------
+
+12. Explain Polymorphic relationship
+
+🟣 Useful when multiple models share a common relationship (like comments or images).
+🟣 Uses morphOne, morphMany, or morphTo methods.
+🟣 Example real-life: A Post and a Video can both have many Comments.
+
+-----------------------------------------
+
+13. What is Eager Loading?
+
+🟣 Useful when multiple models share a common relationship (like comments or images).
+🟣 Uses morphOne, morphMany, or morphTo methods.
+🟣 Example real-life: A Post and a Video can both have many Comments.
+
+-----------------------------------------
+
+14. What is Eager Loading?
+
+🟣 Loads relationships with the main query to avoid extra queries.
+🟣 Prevents the N+1 query problem.
+🟣 Uses the with() method in Eloquent.
+🟣 It improves performance when accessing related models.
+
+-----------------------------------------
+
+15. What is the N+1 Query Problem?
+
+🟣 Happens when you load a collection of models, and then for each item you access a related model.
+🟣 That causes 1 query to fetch the main collection + N additional queries (one per item).
+🟣 This can slow down performance, especially with large datasets.
+🟣 Example: $users = User::all(); // This returns 100 users -> then loop for $user->profile->phone; So: 1 query for getting all users, 100 queries for getting each user's profile => 🔥 Total = 101 queries
+
+-----------------------------------------
+
+16. What Is Lazy Loading?
+
+🟣 Lazy loading means Laravel loads relationships only at the moment you access them, not before.
+🟣 It is the default behavior in Eloquent.
+🟣 Although convenient, it can accidentally create N+1 problems if used inside loops or repeated accesses.
+🟣 Useful when you don’t always need the relationship, but risky when loading many related models.
+
+-----------------------------------------
+
+17. What Is Lazy Loading?
+
+🟣 Lazy loading means Laravel loads relationships only at the moment you access them, not before.
+🟣 It is the default behavior in Eloquent.
+🟣 Although convenient, it can accidentally create N+1 problems if used inside loops or repeated accesses.
+🟣 Useful when you don’t always need the relationship, but risky when loading many related models.
+
+-----------------------------------------
+
+18. What Is Lazy Loading?
+
+🟣 Accessors allow you to transform model attribute values when they are retrieved from the database.
+🟣 They do not change what’s stored in the database — only how the value appears when accessed.
+🟣 In modern Laravel (10–12), accessors use the Attribute class instead of the old getSomethingAttribute method.
+
+-----------------------------------------
+
+19. What is the difference between get() and first() in Eloquent?
+
+🟣 get(): Returns a collection containing all matching records.
+🟣 first(): Returns only the first matching record as a single model instance (or null if none is found).
+
+-----------------------------------------
+
+20. What is the difference between create() and save()?
+
+🟣 create():
+    ▫️ Mass-assignment method that creates and persists a new model in a single step.
+    ▫️ Requires the model’s $fillable (or $guarded) property to be properly configured.
+🟣 save():
+    ▫️ Used on an existing (or newly instantiated) model instance to persist changes to the database.
+    ▫️ Allows setting fields individually before saving.
+🟣 Example:
+    ▫️ Using create() — User::create(['name' => 'John', 'email' => 'john@example.com']);
+    ▫️ Using save() — $user = new User; $user->name = 'John'; $user->save();
+
+-----------------------------------------
+
+21. What is the difference between get() and all()?
+
+🟣 all(): Static method that retrieves all records directly from the table.
+🟣 get(): Can be chained with query builder methods to filter results before retrieving.
+
+-----------------------------------------
+
+22. What is the find() method in Eloquent?
+
+🟣 find(): Retrieves a model by its primary key.
+🟣 Returns a single model instance if found, or null if no matching record exists.
+🟣 Can also accept an array of IDs to retrieve multiple records at once (returns a collection).
+
+-----------------------------------------
+
+23. What is the difference between find() and findOrFail()?
+
+🟣 find(): Returns null if the record does not exist.
+🟣 findOrFail(): Throws a ModelNotFoundException when the record is missing.
+🟣 findOrFail() is commonly used when you want Laravel to automatically show a 404 error page.
+
+-----------------------------------------
+
+24. What is the difference between delete() and forceDelete()?
+
+🟣 delete(): Performs a soft delete if the SoftDeletes trait is used.
+🟣 forceDelete(): Permanently removes the record from the database.
+🟣 forceDelete() bypasses soft delete and actually deletes the row.
+
+-----------------------------------------
+
+25. What is the whereHas() method?
+
+🟣 whereHas() filters results based on the existence of a relationship.
+🟣 Returns only models that have related records matching the condition.
+
+-----------------------------------------
+
+26. What is the difference between with() and whereHas()?
+
+🟣 with(): Eager loads relationships but doesn't filter the main query.
+🟣 whereHas(): Filters the main query based on relationship conditions.
+🟣 Can be used together for optimal results.
+
+-----------------------------------------
+
+27. What are database transactions?
+
+🟣 Transactions ensure that a series of database operations succeed or fail together.
+🟣 If any operation fails, all changes are rolled back.
+🟣 Maintains data integrity and consistency.
+
+-----------------------------------------
+
+28. What is the difference between beginTransaction() and transaction()?
+
+🟣 transaction(): Automatically handles commit and rollback.
+🟣 beginTransaction(): Requires manual commit() or rollback() calls.
+🟣 transaction() is safer and recommended for most use cases.
+
+-----------------------------------------
+
+29. What are database indexes?
+
+🟣 Database indexing is a way to make database searches faster.
+🟣 An index is like a book’s table of contents — it helps the database find data quickly without scanning the whole table.
+🟣 Why indexing is used:
+    ▫️ Speeds up SELECT queries
+    ▫️ Makes searching, filtering, and sorting much faster
+🟣 Without index → database checks every row (slow)
+🟣 With index → database jumps directly to the matching rows (fast)
+
+-----------------------------------------
+
+30. What are database indexes?
+
+🟣 Database indexing is a way to make database searches faster.
+🟣 An index is like a book’s table of contents — it helps the database find data quickly without scanning the whole table.
+🟣 Why indexing is used:
+    ▫️ Speeds up SELECT queries
+    ▫️ Makes searching, filtering, and sorting much faster
+🟣 Without index → database checks every row (slow)
+🟣 With index → database jumps directly to the matching rows (fast)
 
 -----------------------------------------

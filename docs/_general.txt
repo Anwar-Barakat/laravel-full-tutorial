@@ -39,3 +39,117 @@
 🟣 Example: php artisan make:controller UserController
 
 -----------------------------------------
+
+05. What are Laravel collections?
+
+🟣 Collections are powerful wrapper objects around arrays that provide expressive, chainable methods for manipulating data.
+🟣 They give you dozens of helpful methods (like map, filter, pluck, sum, first, count, etc.) to transform and work with data easily.
+🟣 Example:
+    ▫️ $users = User::all();
+    ▫️ $names = $users->pluck('name');
+    ▫️ $active = $users->where('active', true);
+
+-----------------------------------------
+
+06. What are service container?
+
+🟣 The service container is Laravel’s system for giving your classes the objects they need automatically.
+🟣 It is also called the IoC (Inversion of Control) container.
+🟣 When you type-hint something in a constructor, Laravel checks the container and creates the needed class for you.
+🟣 If your class depends on an interface, you must tell Laravel which real class to use.
+🟣 Example binding: app()->bind(PaymentInterface::class, StripePayment::class);
+    ▫️ app() → gives access to the service container
+    ▫️ bind() → tells Laravel: “When someone needs PaymentInterface, give them StripePayment.”
+    ▫️ Any time you type-hint PaymentInterface, Laravel automatically gives you a StripePayment object.
+
+-----------------------------------------
+
+07. What are service providers?
+
+🟣 Service providers are Laravel’s setup files — they tell Laravel what to load when the app starts.
+🟣 They are responsible for registering services, bindings, and any class you want the container to manage.
+🟣 All service providers extend Laravel’s main ServiceProvider class.
+🟣 You can find them in the app/Providers folder.
+🟣 They have two important methods:
+    ▫️ register() → Used to bind classes or interfaces into the service container. (Only registration, no logic that depends on other services.)
+    ▫️ boot() → Runs after everything is registered. Good for: routes, events, observers, and anything that needs other services to exist.
+
+-----------------------------------------
+
+08. What is the IoC (Inversion of Control)
+
+🟣 IoC is just another name for Laravel’s service container.
+🟣 It means your code doesn’t create objects manually — the container creates them for you.
+🟣 The container decides which class to build (based on your bindings).
+🟣 This enables dependency injection, which makes your code cleaner, easier to change, and easier to test.
+
+-----------------------------------------
+
+09. What are differences between Service Provider and Service Container?
+
+🟣 Service Container
+    ▫️ The service container is the tool Laravel uses to manage and give you the dependencies your classes need.
+    ▫️ Think of it like a smart box inside Laravel where: You store bindings (interface → implementation) - It handles dependency injection automatically
+    ➡️ The service container is the machine that resolves dependencies.
+
+🟣 Service Provider (What it does)
+    ▫️ A service provider is the place where you tell Laravel WHAT to put into the container.
+    ▫️ It is the class responsible for: Registering bindings - Registering events (protected $listen = []), routes, middleware, etc. - Bootstrapping parts of the application
+    ➡️ A service provider is the place where you configure the container.
+
+-----------------------------------------
+
+10. What is the register() method in a service provider?
+
+🟣 The register() method is used to bind classes, interfaces, or services into the service container.
+🟣 It is used for registration only, not for running logic.
+🟣 No access to request data should happen here.
+🟣 Ideal for: Binding interfaces, singletons, helper services, repositories.
+
+-----------------------------------------
+
+11. What is the boot() method in a service provider?
+
+🟣 The boot() method runs after all service providers have been registered.
+🟣 Used to execute logic that depends on already-registered bindings.
+🟣 Ideal for: Registering events, routes, observers, middleware aliases, custom validation rules.
+
+-----------------------------------------
+
+12. What is dependency injection?
+
+🟣 Dependency injection is a design pattern where a class receives (is “injected with”) the objects it depends on instead of creating them internally.
+🟣 Laravel automatically resolves and injects dependencies using type-hinting and the service container.
+🟣 Helps make code more modular, testable, and easier to maintain.
+
+-----------------------------------------
+
+13. What are facades in Laravel?
+
+🟣 Facades provide a static interface to classes in the service container.
+🟣 Make Laravel services accessible with simple, expressive syntax.
+🟣 Examples: Cache, DB, Mail, Storage, etc.
+
+-----------------------------------------
+
+14. What is the difference between a facade and a helper function?
+
+🟣 Facades: Uses a class - Goes through Laravel’s service container - Better for testing and mocking
+🟣 Helper functions: A simple global function - Calls things directly - Better for quick shortcuts
+
+-----------------------------------------
+
+15. What is Laravel Telescope?
+
+🟣 Telescope is a debugging and monitoring tool for Laravel applications.
+🟣 Provides insights into requests, exceptions, database queries, jobs, etc.
+🟣 Invaluable during development for debugging.
+
+-----------------------------------------
+
+16. What is Laravel Tinker?
+
+🟣 Allows interacting with your application from the command line.
+🟣 Great for testing code, querying the database, and debugging.
+
+-----------------------------------------

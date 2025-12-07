@@ -18,3 +18,19 @@
 🟣 validate() Method -> Quick validation inside controllers, A method available in controllers that validates directly from the request. (Small forms, When you don’t want an extra file)
 
 -----------------------------------------
+
+03. What is form request validation?
+
+🟣 Form requests are custom request classes that contain validation logic.
+🟣 Keeps controllers clean by moving validation to dedicated classes.
+🟣 Can authorize requests and customize error messages.
+
+-----------------------------------------
+
+04. How do you create a form request?
+
+🟣 Use the Artisan command to generate a form request class.
+🟣 Define validation rules in the rules() method.
+🟣 Define authorization logic in the authorize() method.
+
+-----------------------------------------
