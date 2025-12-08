@@ -1,58 +1,91 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Laravel E-commerce API
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+This project is a comprehensive backend API, built with Laravel. It demonstrates modern architectural patterns, advanced features, and robust integrations, providing a scalable foundation for e-commerce services.
 
-## About Laravel
+## Table of Contents
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+- [Features Highlight](#features-highlight)
+- [Architectural Principles](#architectural-principles)
+- [Key Integrations](#key-integrations)
+- [Setup & Installation](#setup--installation)
+- [API Endpoints Overview](#api-endpoints-overview)
+- [Technical Stack](#technical-stack)
+- [Contributing](#contributing)
+- [License](#license)
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Features Highlight
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+This API offers a rich set of functionalities essential for a modern e-commerce platform:
 
-## Learning Laravel
+*   **Product Management**: Full CRUD for products with advanced querying (filtering, sorting), image galleries, tagging, and polymorphic reviews.
+*   **Order Management**: Complete CRUD for orders, supported by fine-grained authorization policies.
+*   **User Authentication**: Robust authentication system via Laravel Sanctum, including registration, login, logout, password reset, email verification, Two-Factor Authentication (2FA), and social login (Google).
+*   **Data Import/Export**: Comprehensive tools for exporting data (Excel, CSV, PDF, queued for large sets) and importing orders with detailed validation.
+*   **Payment Processing**: Secure integrations with Stripe for both:
+    *   **Stripe Checkout**: Redirect-based payments with webhook handling for fulfillment.
+    *   **Stripe Payment Intents**: Custom on-site payment forms, customer management, and webhook handling.
+*   **Notifications**: Multi-channel (Email, Database, Broadcast) and queueable notifications for events like order creation.
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+## Architectural Principles
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+The project strictly adheres to best practices, ensuring a clean, maintainable, and scalable codebase:
 
-## Laravel Sponsors
+*   **Action Layer**: Business logic encapsulated in single-responsibility Action classes for thin controllers.
+*   **Data Transfer Objects (DTOs)**: Type-safe data contracts for clear communication between layers and robust validation.
+*   **API Resources**: Standardized JSON response formatting for consistent API output.
+*   **Policies & Permissions**: Centralized authorization using Laravel Policies and `spatie/laravel-permission` for fine-grained access control.
+*   **Event-Driven Architecture**: Decoupled side effects via Events and Listeners (e.g., Order created triggers multiple background tasks).
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+## Key Integrations
 
-### Premium Partners
+*   **Laravel Sanctum**: API token authentication.
+*   **`spatie/laravel-permission`**: Role and permission management.
+*   **`spatie/laravel-medialibrary`**: Robust media (image) handling with conversions and queues.
+*   **`spatie/laravel-data`**: DTOs for structured data and validation.
+*   **`spatie/laravel-query-builder`**: Enhanced API querying capabilities.
+*   **`maatwebsite/excel`**: Excel, CSV, and PDF import/export.
+*   **Stripe**: Secure payment gateway integration.
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+## Setup & Installation
+
+Follow these standard Laravel steps to get the project running locally:
+
+1.  **Clone the repository:** `git clone https://github.com/your-username/laravel-ecommerce-api.git && cd laravel-ecommerce-api`
+2.  **Install dependencies:** `composer install`
+3.  **Environment setup:** `cp .env.example .env && php artisan key:generate`
+4.  **Configure `.env`**: Set up database, Stripe, and Mail credentials.
+5.  **Database & Seeding**: `php artisan migrate --seed` (add `--seed` if you want initial data).
+6.  **Start Services**:
+    *   `php artisan serve` (for the web server)
+    *   `php artisan queue:work` (for background jobs)
+    *   Configure system cron for `php artisan schedule:run` (for scheduled tasks).
+
+## API Endpoints Overview
+
+The API is versioned (e.g., `/api/v1`, `/api/v2`) and covers:
+
+*   `/api/v1-v13/products`: Product CRUD with progressive enhancements.
+*   `/api/v14/orders`: Core Order CRUD.
+*   `/api/v15/orders-exports`, `/api/v16/orders-imports`, `/api/v17/orders/export/pdf-*`: Data import/export functionalities.
+*   `/api/v19/orders`, `/api/stripe/*`: Stripe Checkout integration.
+*   `/api/v20/orders`, `/api/stripe/payment-intents*`: Stripe Payment Intents integration.
+*   `/api/v24/auth/*`: Comprehensive authentication (register, login, 2FA, social login).
+
+## Technical Stack
+
+*   **Framework**: Laravel (v12)
+*   **Database**: MySQL
+*   **Auth**: Laravel Sanctum
+*   **Permissions**: `spatie/laravel-permission`
+*   **Media**: `spatie/laravel-medialibrary`
+*   **DTOs**: `spatie/laravel-data`
+*   **Exports/Imports**: `maatwebsite/excel`, `barryvdh/laravel-dompdf`
+*   **Payments**: Stripe
+*   **Testing**: PHPUnit
 
 ## Contributing
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
-
-## Code of Conduct
-
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
-
-## Security Vulnerabilities
-
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+See the [Laravel documentation](https://laravel.com/docs/contributions) for general contribution guidelines.
 
 ## License
 
