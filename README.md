@@ -82,11 +82,3 @@ The API is versioned (e.g., `/api/v1`, `/api/v2`) and covers:
 *   **Exports/Imports**: `maatwebsite/excel`, `barryvdh/laravel-dompdf`
 *   **Payments**: Stripe
 *   **Testing**: PHPUnit
-
-## Contributing
-
-See the [Laravel documentation](https://laravel.com/docs/contributions) for general contribution guidelines.
-
-## License
-
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
