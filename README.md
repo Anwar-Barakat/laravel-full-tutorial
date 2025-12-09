@@ -1,4 +1,4 @@
-# Laravel E-commerce API
+# Laravel API Tutorial
 
 This project is a comprehensive backend API, built with Laravel. It demonstrates modern architectural patterns, advanced features, and robust integrations, providing a scalable foundation for e-commerce services.
 
