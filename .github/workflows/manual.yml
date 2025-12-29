@@ -1,14 +1,14 @@
 on:
   workflow_dispatch:
-    inputs: 
-      environment: 
+    inputs:
+      environment:
         description: "Choose env"
         required: true
         default: "staging"
         type: choice
-        options: 
+        options:
           - staging
-          - production 
+          - production
           - main
 
 jobs:
@@ -17,4 +17,4 @@ jobs:
 
     steps:
       - name: Deploy Application
-        run: echo "Deploying the application to ${{ input.environment }}"
+        run: echo "Deploying the application to ${{ inputs.environment }}"
