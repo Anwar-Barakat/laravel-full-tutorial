@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(code:*)",
+      "Read(//home/nasar/**)",
+      "Read(//mnt/c/Users/**)",
+      "Bash(php artisan:*)"
+    ]
+  }
+}
