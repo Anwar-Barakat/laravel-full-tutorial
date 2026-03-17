@@ -1,0 +1,104 @@
+<?php
+
+// ============================================================
+// Problem 01 — Booking Model & Migration
+// ============================================================
+
+// database/migrations/xxxx_xx_xx_create_bookings_table.php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('bookings', function (Blueprint $table) {
+            $table->id();
+            $table->string('school_name');
+            $table->string('destination');
+            $table->integer('student_count');
+            $table->decimal('amount', 8, 2);
+            $table->date('trip_date');
+            $table->string('status')->default('pending');
+
+            $table->timestamps();
+            $table->softDeletes();
+
+            $table->index('school_name');
+            $table->index(['status', 'trip_date']);
+            $table->index('trip_date');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('bookings');
+    }
+};
+
+
+// ============================================================
+// app/Models/Booking.php
+// ============================================================
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Database\Eloquent\Casts\Attribute;
+
+class Booking extends Model
+{
+    use SoftDeletes;
+
+    protected $fillable = [
+        'school_name',
+        'destination',
+        'student_count',
+        'amount',
+        'trip_date',
+        'status',
+    ];
+
+    protected $casts = [
+        'status'    => 'string',
+        'trip_date' => 'date',
+    ];
+
+    protected $hidden = ['deleted_at'];
+
+    protected $appends = ['amount_formatted', 'is_upcoming'];
+
+    public function schoolName(): Attribute
+    {
+        return Attribute::make(
+            set: fn(string $value) => str($value)->trim()->title()->toString(),
+        );
+    }
+
+    public function amountFormatted(): Attribute
+    {
+        return Attribute::make(
+            get: fn() => 'AED ' . number_format($this->amount, 2),
+        );
+    }
+
+    public function isUpcoming(): Attribute
+    {
+        return Attribute::make(
+            get: fn() => $this->trip_date?->isFuture() ?? false,
+        );
+    }
+
+    public function scopePaid($query)
+    {
+        return $query->where('status', 'paid');
+    }
+
+    public function scopeUpcoming($query)
+    {
+        return $query->where('trip_date', '>', now());
+    }
+}

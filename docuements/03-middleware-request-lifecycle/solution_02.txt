@@ -1,0 +1,107 @@
+<?php
+
+// ============================================================
+// Problem 02 — Rate Limiting & Throttle
+// ============================================================
+
+// app/Http/Middleware/AddRateLimitHeaders
+
+use Illuminate\Cache\RateLimiter;
+
+class AddRateLimitHeaders {
+    public function __construct(private RateLimiter $limiter) {}
+
+    public function handle(Request $request, Closure $next): Response {
+        $response = $next($request);
+
+        $response->headers->set('X-RateLimit-Limit', 60);
+
+        $key       = 'api:' . ($request->user()?->id ?? $request->ip());
+        $remaining = max(0, 60 - $this->limiter->attempts($key));
+
+        $response->headers->set('X-RateLimit-Remaining', $remaining);
+
+        return $response;
+    }
+}
+
+
+// ============================================================
+// bootstrap/app.php  (updated — adds AddRateLimitHeaders + throttle:api)
+// ============================================================
+
+->withMiddleware(function (Middleware $middleware): void {
+    $middleware->api(
+        prepend: [\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class],
+        append:  [
+            \App\Http\Middleware\ForceJsonResponse::class,
+            \App\Http\Middleware\ApiRequestLogger::class,
+            \App\Http\Middleware\AddRateLimitHeaders::class,
+            'throttle:api',
+        ]
+    );
+    $middleware->alias([
+        'api.key'      => \App\Http\Middleware\VerifyApiKey::class,
+        'subscription' => \App\Http\Middleware\CheckSubscription::class,
+    ]);
+});
+
+
+// ============================================================
+// routes/api.php  (updated — adds throttle:booking-create)
+// ============================================================
+
+Route::middleware(['api.key', 'subscription'])->group(function () {
+    Route::apiResource('bookings', BookingController::class)->except(['store']);
+    Route::post('bookings', [BookingController::class, 'store'])->middleware('throttle:booking-create');
+});
+
+
+// ============================================================
+// app/Providers/AppServiceProvider.php
+// ============================================================
+
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Http\Request;
+
+public function boot(): void
+{
+    RateLimiter::for('api', function (Request $request) {
+        return $request->user()
+            ? Limit::perMinute(60)->by($request->user()?->id)->response(function () {
+                return response()->json(['message' => 'Too many requests.'], 429, ['Retry-After' => 60]);
+            })
+            : Limit::perMinute(10)->by($request->ip());
+    });
+
+    RateLimiter::for('booking-create', function (Request $request) {
+        return Limit::perMinute(5)->by($request->user()?->id ?? $request->ip());
+    });
+
+    RateLimiter::for('by-plan', function (Request $request) {
+        return match($request->user()?->plan) {
+            'pro'   => Limit::perMinute(100)->by($request->user()?->id),
+            default => Limit::perMinute(30)->by($request->user()?->id ?? $request->ip()),
+        };
+    });
+}
+
+
+// ============================================================
+// Tips
+// ============================================================
+
+// handle()     → before $next = runs on way IN | after $next = runs on way OUT
+// terminate()  → runs after response sent (non-blocking) | needs to be appended to a group
+// max(0, x)    → prevents negative: 60 - 70 = -10 → max(0, -10) = 0
+
+// RateLimiter::for('name', fn)  → DEFINES the rule (writes the law)
+// RateLimiter::attempts($key)   → returns how many requests that key has made
+// 'throttle:api' in middleware  → ENFORCES the rule (the police) — without it, rule never runs
+
+// Limit::perMinute(60)->by($id) → allow 60/min per $id
+// ->response(fn)                → custom response when limit exceeded
+
+// response()->json($data, $status, $headers)
+//   third param = headers → e.g. ['Retry-After' => 60] tells client when to retry

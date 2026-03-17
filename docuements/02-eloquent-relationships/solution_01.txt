@@ -1,0 +1,276 @@
+<?php
+
+// ============================================================
+// Problem 01 — School-Booking Relationship System
+// ============================================================
+
+// database/migrations/xxxx_create_schools_table.php
+
+Schema::create('schools', function (Blueprint $table) {
+    $table->id();
+    $table->string('name');
+    $table->string('email')->unique();
+    $table->timestamps();
+});
+
+
+// database/migrations/xxxx_create_destinations_table.php
+
+Schema::create('destinations', function (Blueprint $table) {
+    $table->id();
+    $table->string('name');
+    $table->timestamps();
+});
+
+
+// database/migrations/xxxx_create_school_destination_table.php
+
+Schema::create('school_destination', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('school_id')->constrained()->cascadeOnDelete();
+    $table->foreignId('destination_id')->constrained()->cascadeOnDelete();
+    $table->decimal('price_per_student', 8, 2);
+    $table->timestamps();
+
+    $table->index('school_id');
+    $table->index('destination_id');
+});
+
+
+// database/migrations/xxxx_create_bookings_table.php
+
+Schema::create('bookings', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('school_id')->constrained()->cascadeOnDelete();
+    $table->foreignId('destination_id')->constrained()->cascadeOnDelete();
+    $table->integer('student_count');
+    $table->decimal('amount', 8, 2);
+    $table->date('trip_date');
+    $table->string('status')->default('pending');
+    $table->timestamps();
+    $table->softDeletes();
+
+    $table->index(['school_id']);
+    $table->index(['status', 'trip_date']);
+    $table->index(['destination_id']);
+});
+
+
+// database/migrations/xxxx_create_payments_table.php
+
+Schema::create('payments', function (Blueprint $table) {
+    $table->id();
+    $table->foreignId('booking_id')->constrained()->cascadeOnDelete();
+    $table->decimal('amount', 8, 2);
+    $table->string('status')->default('pending');
+    $table->timestamps();
+    $table->softDeletes();
+
+    $table->index(['status']);
+    $table->index(['booking_id']);
+});
+
+
+// ============================================================
+// app/Models/School.php
+// ============================================================
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class School extends Model
+{
+    protected $fillable = ['name', 'email'];
+
+    public function bookings()
+    {
+        return $this->hasMany(Booking::class);
+    }
+
+    public function latestBooking()
+    {
+        return $this->hasOne(Booking::class)->latestOfMany();
+    }
+
+    public function payments()
+    {
+        return $this->hasManyThrough(Payment::class, Booking::class);
+    }
+
+    public function destinations()
+    {
+        return $this->belongsToMany(Destination::class, 'school_destination')
+            ->withPivot('price_per_student')
+            ->withTimestamps();
+    }
+}
+
+
+// ============================================================
+// app/Models/Destination.php
+// ============================================================
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class Destination extends Model
+{
+    protected $fillable = ['name'];
+
+    public function schools()
+    {
+        return $this->belongsToMany(School::class, 'school_destination')
+            ->withPivot('price_per_student')
+            ->withTimestamps();
+    }
+}
+
+
+// ============================================================
+// app/Models/Booking.php
+// ============================================================
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+class Booking extends Model
+{
+    use SoftDeletes;
+
+    protected $fillable = [
+        'school_id', 'destination_id',
+        'student_count', 'amount', 'trip_date', 'status',
+    ];
+
+    public function school()
+    {
+        return $this->belongsTo(School::class);
+    }
+
+    public function destination()
+    {
+        return $this->belongsTo(Destination::class);
+    }
+
+    public function payments()
+    {
+        return $this->hasMany(Payment::class);
+    }
+}
+
+
+// ============================================================
+// app/Models/Payment.php
+// ============================================================
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+class Payment extends Model
+{
+    use SoftDeletes;
+
+    protected $fillable = ['booking_id', 'amount', 'status'];
+
+    public function booking()
+    {
+        return $this->belongsTo(Booking::class);
+    }
+}
+
+
+// ============================================================
+// app/Http/Resources/SchoolResource.php
+// ============================================================
+
+class SchoolResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'                  => $this->id,
+            'name'                => $this->name,
+            'email'               => $this->email,
+            'bookings_count'      => $this->bookings_count,
+            'bookings_sum_amount' => $this->bookings_sum_amount,
+            'bookings'            => BookingResource::collection($this->whenLoaded('bookings')),
+        ];
+    }
+}
+
+
+// ============================================================
+// app/Http/Resources/BookingResource.php
+// ============================================================
+
+class BookingResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'            => $this->id,
+            'destination'   => DestinationResource::make($this->whenLoaded('destination')),
+            'student_count' => $this->student_count,
+            'amount'        => 'AED ' . number_format($this->amount, 2),
+            'trip_date'     => $this->trip_date?->format('Y-m-d'),
+            'status'        => $this->status,
+        ];
+    }
+}
+
+
+// ============================================================
+// app/Http/Resources/DestinationResource.php
+// ============================================================
+
+class DestinationResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return ['id' => $this->id, 'name' => $this->name];
+    }
+}
+
+
+// ============================================================
+// app/Http/Controllers/Api/SchoolController.php
+// ============================================================
+
+namespace App\Http\Controllers\Api;
+
+use App\Models\School;
+use App\Http\Resources\SchoolResource;
+use Illuminate\Http\Request;
+
+class SchoolController extends Controller
+{
+    public function index(Request $request)
+    {
+        $schools = School::with(['bookings.payments', 'destinations'])
+            ->withCount('bookings')
+            ->withSum('bookings', 'amount')
+            ->paginate($request->input('per_page', 15));
+
+        return SchoolResource::collection($schools);
+    }
+
+    public function show(School $school)
+    {
+        $school->load(['bookings.payments', 'destinations', 'latestBooking']);
+
+        return SchoolResource::make($school);
+    }
+}
+
+
+// ============================================================
+// routes/api.php
+// ============================================================
+
+Route::apiResource('schools', SchoolController::class)->only(['index', 'show']);
