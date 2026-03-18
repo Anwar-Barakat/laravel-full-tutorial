@@ -4,7 +4,11 @@
       "Bash(code:*)",
       "Read(//home/nasar/**)",
       "Read(//mnt/c/Users/**)",
-      "Bash(php artisan:*)"
+      "Bash(php artisan:*)",
+      "Bash(cd:*)",
+      "WebSearch",
+      "WebFetch(domain:stitcher.io)",
+      "Bash(git add:*)"
     ]
   }
 }
