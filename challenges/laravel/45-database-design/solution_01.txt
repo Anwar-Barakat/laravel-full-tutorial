@@ -1,0 +1,151 @@
+<?php
+
+// ============================================================
+// Problem 01 — Database Architecture
+// ============================================================
+
+
+
+// ============================================================
+// ERD — Entity Relationships
+//
+// schools  1:∞  bookings  ∞:1  trips
+// bookings 1:∞  payments
+//
+// schools:
+//   id, name, emirate, type (private/public/international)
+//   contact_name, contact_email UNIQUE, contact_phone
+//   is_active, timestamps, softDeletes
+//   index: emirate, is_active, (emirate, is_active)
+//
+// trips:
+//   id, title, destination, country, description
+//   price_per_student, min_students, max_students
+//   capacity_remaining (denormalized — updated on booking)
+//   status: draft|active|full|archived
+//   available_from, available_to, image_path
+//   timestamps, softDeletes
+//   index: status, (status, available_from, available_to), destination
+//
+// bookings:
+//   id, school_id FK (restrict delete), trip_id FK (restrict delete)
+//   contact_name, contact_email (SNAPSHOT — not FK to school contact)
+//   student_count, trip_date, amount, status
+//   payment_id (gateway reference), payment_gateway (stripe|mamopay)
+//   pricing_type, base_amount (which strategy was used)
+//   cancellation_reason, cancelled_at
+//   timestamps, softDeletes
+//   index: (school_id, status), (trip_id, trip_date), status, created_at, payment_id
+//
+// payments:
+//   id, booking_id FK (restrict delete)
+//   gateway_transaction_id UNIQUE (idempotency key)
+//   gateway, amount, currency CHAR(3)
+//   status: pending|captured|refunded|partially_refunded|failed
+//   type: charge|refund
+//   gateway_response JSON (raw response — never delete for debugging)
+//   processed_at, timestamps
+//   index: (booking_id, status), gateway_transaction_id, (gateway, status)
+// ============================================================
+
+
+
+// ============================================================
+// Normalization — 3NF analysis
+//
+// 1NF: each column holds atomic value, no repeating groups
+//   ✅ student_count is integer, not comma-separated
+//   ✅ each row unique by PK
+//
+// 2NF: no partial dependencies (auto-satisfied with surrogate PKs)
+//
+// 3NF: no transitive dependencies
+//   Violation example: storing school_name in bookings
+//     bookings.school_name depends on school_id, not booking PK
+//     Fix: store only school_id FK, JOIN to get school_name
+//   ✅ bookings stores school_id FK only
+//
+// Intentional 3NF violations (performance trade-offs):
+//
+//   bookings.contact_email (denormalized snapshot):
+//     WHY: school contact can change after booking
+//     booking is a legal record — must preserve original contact
+//     if stored as FK, school edit would silently alter all past bookings
+//
+//   trips.capacity_remaining (denormalized aggregate):
+//     WHY: calculating via SUM(student_count) on every listing = expensive
+//     trade-off: must update atomically via DB::transaction + decrement
+//     drift correction: nightly job recalculates from source of truth
+// ============================================================
+
+
+
+// ============================================================
+// Index strategy
+//
+// RULE: index WHERE/ORDER BY/JOIN columns on tables > 10,000 rows
+//   or queries running > 100×/day
+//
+// Index 1: school dashboard — most common read
+//   SELECT * FROM bookings WHERE school_id = ? AND status = ?
+//   compound index (school_id, status) — covers both WHERE conditions
+//
+// Index 2: trip availability check — every booking attempt
+//   SELECT SUM(student_count) FROM bookings WHERE trip_id = ? AND status IN (...)
+//   index (trip_id, status)
+//
+// Index 3: admin booking list — date range filter
+//   SELECT * FROM bookings WHERE created_at BETWEEN ? AND ?
+//   index (created_at)
+//
+// Index 4: webhook deduplication — critical path
+//   SELECT id FROM payments WHERE gateway_transaction_id = ?
+//   UNIQUE index — prevents duplicate payments + speeds lookup
+//
+// Index 5: full-text search on trips
+//   MySQL FULLTEXT index on (title, destination, description)
+//   For complex search: move to Elasticsearch (relevance, facets, typo-tolerance)
+//
+// What NOT to index:
+//   status alone (low cardinality: 5 values — poor selectivity)
+//   boolean is_active alone (2 values — index barely helps)
+//   Columns rarely in WHERE/JOIN (write overhead not worth it)
+//
+// Verify with EXPLAIN:
+//   EXPLAIN SELECT * FROM bookings WHERE school_id = 1 AND status = 'paid'
+//   key should show: bookings_school_id_status_index
+//   type should be: 'ref' (index lookup, not 'ALL' full scan)
+// ============================================================
+
+
+
+// ============================================================
+// Query optimization patterns
+//
+// N+1 problem — ALWAYS eager load related models:
+//   ❌ $bookings = Booking::get()
+//      foreach → $booking->school->name  ← 1 + N queries
+//   ✅ Booking::with(['school', 'trip'])->get()  ← 2 queries total
+//
+// Lazy load when conditional:
+//   $booking = Booking::find(1)
+//   if ($needsSchool) $booking->load('school')  ← only if needed
+//
+// Select only needed columns:
+//   ❌ Booking::all()  ← SELECT * — all 50 columns
+//   ✅ Booking::select('id', 'school_id', 'amount', 'status')->paginate(15)
+//
+// Chunking for bulk operations:
+//   Booking::where('status', 'pending')
+//     ->chunkById(100, fn($bookings) → batch update)
+//   ← never load millions of rows into memory
+//
+// Push aggregates to DB, not PHP:
+//   ❌ Booking::get()->sum('amount')  ← loads all rows into PHP
+//   ✅ Booking::sum('amount')  ← SELECT SUM(amount) — single scalar
+//
+// Covering index (all query columns in index):
+//   Index: (school_id, status, amount)
+//   Query: SELECT amount FROM bookings WHERE school_id=? AND status=?
+//   ← DB reads only index, never touches table rows (fastest)
+// ============================================================

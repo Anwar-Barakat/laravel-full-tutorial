@@ -1,0 +1,225 @@
+<?php
+
+// ============================================================
+// Problem 01 — Core Design Patterns
+// ============================================================
+
+
+
+// ============================================================
+// Strategy Pattern — swap algorithms at runtime
+//
+// Problem: pricing rules change per booking type
+//   if/elseif chains in BookingService violate OCP
+//
+// PricingStrategyInterface
+//   calculate(float $baseAmount, int $studentCount): float
+//   label(): string
+//
+// StandardPricing implements PricingStrategyInterface
+//   calculate() → $baseAmount * $studentCount (no discount)
+//   label()     → 'standard'
+//
+// EarlyBirdPricing implements PricingStrategyInterface
+//   calculate() → $baseAmount * $studentCount * 0.85 (15% discount)
+//   label()     → 'early_bird'
+//
+// BulkDiscountPricing implements PricingStrategyInterface
+//   calculate():
+//     match(true):
+//       $studentCount >= 100 → × 0.75
+//       $studentCount >= 50  → × 0.85
+//       $studentCount >= 20  → × 0.90
+//       default              → × 1.00
+//     return $baseAmount * $studentCount * $multiplier
+//   label() → 'bulk'
+//
+// BookingPricingService (context class)
+//   private PricingStrategyInterface $strategy
+//   setStrategy(PricingStrategyInterface $strategy): static  ← fluent setter
+//   calculatePrice(float $baseAmount, int $studentCount): array
+//     total = $this->strategy->calculate(...)
+//     return ['strategy', 'base_amount', 'student_count', 'total']
+//
+// Usage:
+//   $pricer->setStrategy(new EarlyBirdPricing())->calculatePrice(50.00, 30)
+//   $pricer->setStrategy(new BulkDiscountPricing())->calculatePrice(50.00, 80)
+//   ← swap at runtime, no if/else in caller
+//
+// IoC resolution:
+//   app()->makeWith(PricingStrategyInterface::class, ['type' => $booking->pricing_type])
+//   match in ServiceProvider: 'early_bird' → EarlyBirdPricing, etc.
+// ============================================================
+
+
+
+// ============================================================
+// Observer Pattern — booking events trigger multiple listeners
+//
+// Problem: email + log + stats + cache all triggered by booking creation
+//   Direct calls violate OCP — adding listener = modifying service
+//
+// BookingCreated event
+//   __construct(public readonly Booking $booking)
+//
+// Listeners registered in EventServiceProvider::$listen:
+//   BookingCreated::class => [
+//     SendBookingConfirmationEmail::class,
+//     LogBookingActivity::class,
+//     UpdateSchoolStats::class,
+//     ClearBookingCache::class,
+//   ]
+//
+// SendBookingConfirmationEmail
+//   handle(BookingCreated $event): void
+//   Mail::to($event->booking->contact_email)->send(new BookingConfirmation(...))
+//
+// LogBookingActivity
+//   handle(BookingCreated $event): void
+//   activity('booking')->performedOn($event->booking)->log('Booking created')
+//
+// UpdateSchoolStats
+//   handle(BookingCreated $event): void
+//   Cache::increment("school:{$event->booking->school_id}:booking_count")
+//
+// ClearBookingCache
+//   handle(BookingCreated $event): void
+//   Cache::tags(['bookings'])->flush()
+//
+// Dispatch: event(new BookingCreated($booking))
+//   ← all 4 listeners fire; BookingService has zero knowledge of them
+//   ← adding 5th listener = zero changes to BookingService (OCP)
+//   ← queue listeners: implement ShouldQueue for async email
+// ============================================================
+
+
+
+// ============================================================
+// Factory Pattern — create notification from type string
+//
+// Problem: webhook handler receives event type as string
+//   needs to instantiate correct notification class dynamically
+//
+// NotificationFactory
+//   private static array $map:
+//     'booking_confirmed' → BookingConfirmedNotification::class
+//     'booking_cancelled' → BookingCancelledNotification::class
+//     'payment_received'  → PaymentReceivedNotification::class
+//     'trip_reminder'     → TripReminderNotification::class
+//
+//   static create(string $type, mixed $data): Notification
+//     if !isset($map[$type]) → throw InvalidArgumentException
+//     return new $map[$type]($data)
+//
+// BookingConfirmedNotification extends Notification
+//   __construct(private Booking $booking)
+//   via(): ['mail', 'database']
+//   toMail(): MailMessage with subject and body
+//   toArray(): ['booking_id', 'type']
+//
+// Usage:
+//   $notification = NotificationFactory::create('booking_confirmed', $booking)
+//   $booking->school->notify($notification)
+//
+//   From webhook:
+//   $notification = NotificationFactory::create($payload['event'], $booking)
+//
+// Extending: add new type → add entry to $map only, no other changes
+// ============================================================
+
+
+
+// ============================================================
+// Decorator Pattern — add caching without changing repository
+//
+// Problem: want caching on BookingRepository without touching its code
+//
+// BookingRepositoryInterface
+//   findById(int $id): ?Booking
+//   findBySchool(int $schoolId): Collection
+//   create(array $data): Booking
+//   update(int $id, array $data): Booking
+//
+// EloquentBookingRepository implements BookingRepositoryInterface
+//   findById()    → Booking::find($id)
+//   findBySchool()→ Booking::where('school_id', $schoolId)->get()
+//   create()      → Booking::create($data)
+//   update()      → findOrFail → update → return
+//
+// CachedBookingRepository implements BookingRepositoryInterface (decorator)
+//   __construct(BookingRepositoryInterface $inner, int $ttl = 3600)
+//   findById():
+//     Cache::tags(['bookings'])->remember("booking:{$id}", $ttl, fn() → inner)
+//   findBySchool():
+//     Cache::tags(['bookings', "school:{$schoolId}"])->remember(...)
+//   create():
+//     $booking = $this->inner->create($data)
+//     Cache::tags(['bookings'])->flush()  ← invalidate on write
+//     return $booking
+//   update():
+//     $booking = $this->inner->update(...)
+//     Cache::tags(['bookings'])->forget("booking:{$id}")
+//     return $booking
+//
+// Wire in AppServiceProvider:
+//   if config('cache.bookings_enabled'):
+//     new CachedBookingRepository(new EloquentBookingRepository())
+//   else:
+//     new EloquentBookingRepository()
+//
+// Caller never knows if caching is active — same interface
+// ============================================================
+
+
+
+// ============================================================
+// Repository Pattern — abstract data access
+//
+// Purpose: callers don't know if data comes from DB, Redis, or test stub
+//
+// Test double — InMemoryBookingRepository implements BookingRepositoryInterface
+//   private array $store = []
+//   private int $nextId = 1
+//   findById(int $id): ?Booking → return $this->store[$id] ?? null
+//   create(array $data): Booking
+//     new Booking([...$data, 'id' => $this->nextId++])
+//     $this->store[$booking->id] = $booking
+//     return $booking
+//
+// In tests:
+//   $this->app->bind(BookingRepositoryInterface::class, InMemoryBookingRepository::class)
+//   ← no database hits, tests 10× faster
+//   ← no need to seed or clean up DB
+// ============================================================
+
+
+
+// ============================================================
+// Singleton Pattern — Laravel IoC and when NOT to use own
+//
+// Laravel uses Singleton internally:
+//   App container: app() always returns same instance
+//   DB connections: one connection per request
+//   Cache, Config, Log: resolved once, reused
+//
+// Register your own Singleton:
+//   $this->app->singleton(BookingStatsService::class, fn() => new BookingStatsService())
+//   → same instance every call to app(BookingStatsService::class)
+//
+// When to use:
+//   Expensive to instantiate (DB connections, HTTP clients)
+//   Stateless services (formatters, calculators)
+//
+// When NOT to use:
+//   Stateful objects in Octane/Swoole → persists across requests → data leaks
+//   Objects holding user-specific data
+//   Anything that must differ per request
+//
+// Octane risk example:
+//   BookingContext with private ?int $currentUserId
+//   As singleton: userId persists from User A's request to User B's request
+//   Security vulnerability — never use stateful singletons with Octane
+//
+// Safe: bind (not singleton) for request-scoped objects:
+//   $this->app->bind(BookingContext::class)  ← new instance per resolve
+// ============================================================

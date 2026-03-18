@@ -1,0 +1,121 @@
+<?php
+
+// ============================================================
+// Problem 01 — Microservices vs Monolith
+// ============================================================
+
+
+
+// ============================================================
+// Monolith — when it's the right choice
+//
+// Tripz is a monolith. That is the correct decision.
+//
+// Arguments FOR monolith:
+//   Team size: 3 devs → microservices require DevOps overhead per service
+//   Domain: well understood → premature decomposition = wrong boundaries
+//   Deployment: single Laravel app on ECS/VPS → simple CI/CD
+//   Data: most queries JOIN bookings + schools + trips → splitting = distributed JOINs
+//   Transactions: booking + payment + capacity = single DB transaction (free in monolith)
+//   Testing: one suite, one database, one deploy
+//   Performance: in-process calls 1000× faster than inter-service HTTP
+//
+// Arguments AGAINST (valid only at scale):
+//   Team of 50+ stepping on each other → merge conflicts constantly
+//   Different scaling: trip reads 100× more than payments
+//   Different deployment cadences: payments weekly (compliance), others 5×/day
+//   Technology mismatch: AI (Python/GPU) + core (PHP/Laravel) → can't coexist
+//
+// Tripz answer: monolith until there is a proven business reason to split
+// ============================================================
+
+
+
+// ============================================================
+// Modular Monolith — structure for clean boundaries
+//
+// Directory structure:
+//   app/Modules/
+//     Booking/  → Http/Controllers, Models, Services, Events, Repositories,
+//                  Contracts, BookingServiceProvider.php
+//     Payment/  → Http/Controllers, Gateways, Services, Contracts,
+//                  PaymentServiceProvider.php
+//     Notification/ → Services, Channels, NotificationServiceProvider.php
+//     School/   → Models, Services, SchoolServiceProvider.php
+//
+// Each module has a ServiceProvider:
+//   loadRoutesFrom(__DIR__ . '/routes.php')
+//   loadMigrationsFrom(__DIR__ . '/database/migrations')
+//   bind interfaces to implementations
+//
+// Register in bootstrap/providers.php:
+//   BookingServiceProvider, PaymentServiceProvider, etc.
+// ============================================================
+
+
+
+// ============================================================
+// Module boundary rules
+//
+// ✅ Cross-module via interface (allowed):
+//   BookingService depends on PaymentGatewayInterface
+//   ← interface defined in Payment/Contracts/
+//   ← BookingService never imports StripeGateway directly
+//
+// ❌ Cross-module via internal class (violation):
+//   use App\Modules\Payment\Services\StripeGateway  ← NEVER
+//   use App\Modules\Payment\Models\Transaction      ← NEVER
+//
+// ✅ Cross-module via events (fully decoupled):
+//   Booking fires event(new BookingCreated($booking))
+//   Notification module listens — registers in EventServiceProvider
+//   ← Booking knows nothing about Notification; zero coupling
+//
+// ✅ Database: each module owns its tables
+//   bookings → Booking module
+//   payments → Payment module
+//   Cross-module data needed → query via interface, not JOIN
+//   ← when extracted to microservice, boundary is already clean
+// ============================================================
+
+
+
+// ============================================================
+// Service layer as preparation for extraction
+//
+// BookingService has zero HTTP coupling:
+//   does NOT import Request or Response
+//   does NOT know it's being called via HTTP
+//
+// Same BookingService works as:
+//   1. Controller dependency (HTTP)
+//   2. Artisan command dependency (CLI)
+//   3. Queue job dependency (background worker)
+//   4. HTTP client target (microservice entry point)
+//
+// Thin adapters wrap the service:
+//   BookingController → receives HTTP, calls service, returns JSON
+//   CreateBookingCommand → receives CLI args, calls service, outputs text
+//   ← only the adapter changes when delivery mechanism changes
+//   ← extract to microservice: same BookingService, new HTTP entrypoint
+// ============================================================
+
+
+
+// ============================================================
+// When to split — signals that indicate extraction
+//
+// ✅ Valid signals:
+//   Independent scaling: trips 100× more reads than payments
+//   Different deployment cadence: payments weekly, bookings 5×/day
+//   Technology mismatch: AI (Python) + core (PHP) can't coexist
+//   Data ownership conflict: two teams fighting over same models
+//   Blast radius: PDF generation bug takes down booking API
+//
+// ❌ Invalid reasons:
+//   "Microservices are modern" → premature optimisation
+//   "Netflix does it" → Netflix has 1000 engineers
+//   Team of 3 → overhead kills velocity
+//   Performance → in-process monolith is faster
+//   Under 100k requests/day → no scale problem
+// ============================================================

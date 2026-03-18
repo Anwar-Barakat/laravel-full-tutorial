@@ -1,0 +1,134 @@
+<?php
+
+// ============================================================
+// Problem 01 — API Architecture Decisions
+// ============================================================
+
+
+
+// ============================================================
+// REST Design — resources, verbs, status codes
+//
+// Route structure for Tripz:
+//   Route::apiResource('bookings', BookingController::class)
+//     GET    /v1/bookings           → index  (list + filter)
+//     POST   /v1/bookings           → store  (create)
+//     GET    /v1/bookings/{booking} → show
+//     PUT    /v1/bookings/{booking} → update (full)
+//     PATCH  /v1/bookings/{booking} → update (partial)
+//     DELETE /v1/bookings/{booking} → destroy
+//
+//   Sub-resources for relationships:
+//     GET  /v1/bookings/{booking}/payments → list booking's payments
+//     POST /v1/bookings/{booking}/payments → add payment to booking
+//
+//   State transitions (not CRUD) → POST to action sub-resource noun:
+//     POST /v1/bookings/{booking}/cancel   ← NOT DELETE
+//     POST /v1/bookings/{booking}/confirm
+//     POST /v1/bookings/{booking}/refund
+//     WHY: DELETE means remove record; cancel is a state change, not deletion
+//
+// HTTP status codes:
+//   200 OK         → successful GET, PUT, PATCH
+//   201 Created    → successful POST creating resource (return new resource)
+//   204 No Content → successful DELETE, no body returned
+//   400 Bad Request       → malformed JSON, missing fields
+//   401 Unauthorized      → not authenticated (no/invalid token)
+//   403 Forbidden         → authenticated but lacks permission
+//   404 Not Found         → resource doesn't exist
+//   422 Unprocessable     → valid format, fails validation or business rule
+//   429 Too Many Requests → rate limit exceeded
+//   500 Server Error      → unexpected error
+// ============================================================
+
+
+
+// ============================================================
+// API Versioning strategies
+//
+// Strategy 1: URL versioning — /v1/, /v2/ ← RECOMMENDED for Tripz
+//   Route::prefix('v1')->group(fn() => Route::apiResource(...))
+//   Route::prefix('v2')->group(fn() => Route::apiResource(...))
+//   ✅ Explicit, cacheable by CDN (URL unique per version)
+//   ✅ Easy to test in browser/Postman without headers
+//   ✅ Clients adopt at own pace — v1 and v2 coexist
+//   ❌ REST purists: version in URL "wrong" (URL should identify resource not version)
+//
+// Strategy 2: Accept header
+//   Accept: application/vnd.tripz.v2+json
+//   ✅ Clean URLs
+//   ❌ Not CDN cacheable (same URL, different responses)
+//   ❌ Harder to test (must set headers)
+//
+// Strategy 3: Query parameter
+//   GET /bookings?version=2
+//   ✅ Easy to test in browser
+//   ❌ Not cleanly cached, easily forgotten
+//
+// Tripz decision: URL versioning (/v1/, /v2/)
+//
+// Version evolution rules:
+//   NEVER remove or rename fields in same major version (breaking change)
+//   ADD fields freely → backwards compatible
+//   Deprecation: Deprecation: true header
+//   Sunset: Sunset: Sat, 01 Jan 2027 00:00:00 GMT header
+//   ← give clients 12 months before removing old version
+// ============================================================
+
+
+
+// ============================================================
+// Pagination strategies
+//
+// Page-based (default) — good for admin tables, reports:
+//   Booking::paginate($request->integer('per_page', 15))
+//   GET /v1/bookings?page=2&per_page=20
+//   Response includes: meta.current_page, meta.last_page, meta.total
+//                      links.first, links.last, links.prev, links.next
+//
+// Cursor-based — for infinite scroll, live feeds:
+//   Booking::orderBy('id')->cursorPaginate(15)
+//   GET /v1/bookings?cursor=eyJpZCI6MTAwfQ
+//   ✅ No page drift when new records added
+//   ✅ Consistent O(log n) performance regardless of depth
+//   ❌ Cannot jump to arbitrary page
+//   Use for: notifications, activity feeds, infinite scroll
+//
+// Keyset pagination — highest performance for large datasets:
+//   Booking::where('id', '>', $afterId)->orderBy('id')->limit(15)->get()
+//   GET /v1/bookings?after_id=1000&per_page=15
+//   ✅ No OFFSET — O(log n) always via PK index
+//   Use for: large table exports, reporting
+// ============================================================
+
+
+
+// ============================================================
+// API Resources — consistent response shape
+//
+// BookingResource extends JsonResource
+//   toArray():
+//     id, type: 'booking'
+//     status: $this->status->value (enum → string)
+//     trip_date: ISO 8601 string
+//     amount: { value, currency, formatted }
+//     is_paid:        $this->isPaid()
+//     is_cancellable: $this->isCancellable()
+//     school: new SchoolResource($this->whenLoaded('school'))
+//     trip:   new TripResource($this->whenLoaded('trip'))
+//     ← whenLoaded: only include if eager loaded (avoids N+1)
+//     payment_id: $this->when($request->user()?->isAdmin(), ...)
+//     ← when: conditionally include based on auth role
+//     _links.self, _links.cancel (null if not cancellable)
+//     _meta.created_at, _meta.updated_at
+//
+// Global error response — consistent format:
+//   ApiErrorResponse::make($message, $status, $errors)
+//   returns: { error: { message, status, errors, trace_id } }
+//
+// Exception handler (bootstrap/app.php or Exceptions/Handler.php):
+//   ValidationException   → 422 + $e->errors() (field-level)
+//   ModelNotFoundException → 404
+//   AuthorizationException → 403
+//   ← only for JSON requests: if ($request->expectsJson())
+// ============================================================

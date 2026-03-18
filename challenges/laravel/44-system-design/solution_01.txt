@@ -1,0 +1,171 @@
+<?php
+
+// ============================================================
+// Problem 01 — System Design Interview
+// ============================================================
+
+
+
+// ============================================================
+// Requirements clarification — always ask first
+//
+// Functional:
+//   Schools browse trips and create bookings
+//   Admin manages trips, pricing, capacity
+//   Payments via MamoPay (UAE) and Stripe (UK)
+//   Email + SMS notifications on booking events
+//   Export reports (PDF/CSV)
+//
+// Non-functional:
+//   1,000 concurrent users (peak: end of school year)
+//   99.9% uptime
+//   Read:write ratio = 10:1 (browsing >> booking)
+//   GDPR / UAE PDPL data residency requirements
+//
+// Out of scope: video streaming, real-time chat, custom trip building
+// ============================================================
+
+
+
+// ============================================================
+// High-level architecture
+//
+// Client Layer:
+//   React SPA (Vite)  |  Mobile App (React Native)
+//         ↓ HTTPS
+// CDN + Load Balancer:
+//   Cloudflare (static assets, DDoS protection)  |  AWS ALB
+//         ↓
+// Application Tier (Laravel 11 + Octane/FrankenPHP):
+//   Instance 1  |  Instance 2  |  Instance 3  (auto-scale)
+//         ↓                ↓
+//   MySQL (RDS)    Redis (ElastiCache)    SQS (Queue)    S3 (Files)
+//
+// Read traffic → cached by Cloudflare + Redis before hitting MySQL
+// Write traffic → goes through all layers synchronously
+// Async work   → queued to SQS, processed by background workers
+// ============================================================
+
+
+
+// ============================================================
+// Data model — core tables
+//
+// schools: id, name, emirate, contact_email, is_active
+//   index: emirate, is_active, (emirate, is_active)
+//
+// trips: id, title, destination, price_per_student, max_students,
+//   capacity_remaining (denormalized), status, available_from, available_to
+//   index: (status, available_from, available_to), destination
+//
+// bookings: id, school_id FK, trip_id FK,
+//   contact_name, contact_email (snapshot at booking time)
+//   student_count, trip_date, amount, status, payment_id, payment_gateway
+//   pricing_type, base_amount, soft deletes
+//   index: (school_id, status), (trip_id, trip_date), status, created_at, payment_id
+//
+// payments: id, booking_id FK, gateway_transaction_id UNIQUE,
+//   gateway, amount, currency, status, type, gateway_response JSON
+//   index: (booking_id, status), gateway_transaction_id
+//
+// Why contact info denormalized in bookings:
+//   School contact can change after booking
+//   Booking is a legal record — snapshot preserves original data
+// ============================================================
+
+
+
+// ============================================================
+// Caching strategy — 3 layers
+//
+// Layer 1: Route-level response cache (full HTTP response)
+//   middleware('cache.response:3600') on GET /trips
+//   ← cache entire JSON response, serve without hitting PHP
+//   When to invalidate: admin creates/updates trip
+//
+// Layer 2: Query result cache (repository layer)
+//   CachedTripRepository wraps EloquentTripRepository (Decorator pattern)
+//   Cache::tags(['trips'])->remember('trips:active', 3600, ...)
+//   Invalidate with Cache::tags(['trips'])->flush() on write
+//
+// Layer 3: User-specific cache
+//   Cache::remember("user:{$userId}:bookings:recent", 300, ...)
+//   Short TTL (5 min) — user data changes more often
+//
+// Cache hit rate target: 80%+ for trip listings
+// What NOT to cache:
+//   Payment status — must be real-time
+//   Booking availability — race conditions if stale
+//   User session data — security risk if shared
+// ============================================================
+
+
+
+// ============================================================
+// Queue strategy — offload slow work
+//
+// Queue driver: SQS in production, database locally
+//
+// Jobs that MUST be queued (never block HTTP response):
+//   SendBookingConfirmationEmail implements ShouldQueue
+//     $tries = 3, $backoff = 60  ← retry 3× with 60s delay
+//   GenerateBookingPdf implements ShouldQueue
+//     $queue = 'reports'  ← separate queue for heavy jobs
+//     Store generated PDF on S3, update booking.report_path
+//
+// Dispatch from event listener on BookingCreated
+//
+// Queue workers:
+//   3 workers for 'default' queue
+//   1 worker for 'reports' queue (heavy PDF generation)
+//   Supervisor: restart on failure, memory limit 128M
+// ============================================================
+
+
+
+// ============================================================
+// Scaling decisions
+//
+// Read replicas — separate read vs write traffic
+//   'read'  → DB_READ_HOST_1, DB_READ_HOST_2 (round-robin)
+//   'write' → DB_WRITE_HOST
+//   'sticky' => true  ← after write, use write connection this request
+//   ← prevents reading your own stale write
+//
+// Octane (FrankenPHP) — warm process between requests
+//   Eliminates ~10ms framework bootstrap per request
+//   WARNING: singletons persist across requests → no user state in singletons
+//
+// Horizontal scaling: stateless Laravel + shared Redis session
+//   Session driver: redis (not file)
+//   All instances share same Redis — no sticky sessions at load balancer
+//
+// CDN: Cloudflare caches static assets
+//   Cache-Control: public, max-age=31536000 for versioned JS/CSS
+//   Cloudflare R2 or S3 for PDFs/documents
+//
+// Indexing — most critical queries:
+//   (school_id, status) — school dashboard
+//   (trip_id, trip_date) — trip capacity check
+//   gateway_transaction_id UNIQUE — webhook deduplication
+// ============================================================
+
+
+
+// ============================================================
+// Security decisions
+//
+// Authentication: Laravel Sanctum (SPA + mobile API tokens)
+//   Not Passport — simpler, no OAuth overhead for first-party app
+//   Token rotation: expire after 30 days
+//
+// Rate limiting:
+//   API: 60/minute per user or IP
+//   Payments: 5/minute per user (stricter)
+//
+// Webhook security (MamoPay):
+//   Verify HMAC signature: hash_hmac('sha256', $body, $secret)
+//   Compare with hash_equals() (timing-safe comparison)
+//   Reject if signature invalid → 401
+//   Dispatch job for async processing → return 200 immediately
+// ============================================================

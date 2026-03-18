@@ -1,0 +1,160 @@
+<?php
+
+// ============================================================
+// Problem 02 — Advanced Database Architecture
+// ============================================================
+
+
+
+// ============================================================
+// Normalization vs Denormalization — when to break 3NF
+//
+// Case 1: Denormalize for read performance
+//   schools.booking_count (denormalized)
+//   schools.total_revenue  (denormalized)
+//
+//   Kept in sync by:
+//     Increment on BookingCreated event listener
+//     Decrement on BookingCancelled event listener
+//     Nightly job recalculates from source of truth (drift correction)
+//
+//   vs normalized:
+//     SELECT COUNT(*) FROM bookings WHERE school_id = ?  (every request)
+//     Expensive aggregate on large table at read time
+//
+//   Trade-off:
+//     Denormalized: O(1) read, maintenance complexity
+//     Normalized:   always accurate, expensive at scale
+//
+// Case 2: Soft deletes — history without hard delete
+//   $table->softDeletes()  ← adds deleted_at column
+//   Booking::find(1)             → WHERE deleted_at IS NULL (default)
+//   Booking::withTrashed()->find → includes deleted rows
+//   Booking::onlyTrashed()->get  → only deleted
+//
+//   WHY for bookings:
+//     Legal: payment records must be retained 7 years
+//     Audit: cancellation reason, who cancelled, when
+//     Restore accidentally cancelled bookings
+//
+//   When NOT to use soft deletes:
+//     High-churn tables (sessions, logs) — wastes column space
+//     GDPR right to erasure → hard delete + separate audit log
+//
+// Case 3: JSON columns — flexible attributes
+//   bookings.metadata JSON nullable
+//   Store gateway-specific extras without schema changes:
+//     ['stripe_customer_id' => 'cus_xxx', 'risk_score' => 45]
+//
+//   Query JSON in MySQL:
+//     Booking::whereJsonContains('metadata->device', 'mobile')
+//     Booking::where('metadata->risk_score', '>', 50)
+//
+//   Index JSON virtual column for performance:
+//     ADD COLUMN device VARCHAR(50) GENERATED ALWAYS AS (metadata->>'$.device') STORED
+//     ADD INDEX idx_device (device)
+//
+//   Trade-off:
+//     JSON: flexible, no migration for new attributes
+//     Normalized columns: type-safe, efficiently indexed, queryable without JSON functions
+// ============================================================
+
+
+
+// ============================================================
+// Migrations best practices
+//
+// Always reversible: down() perfectly undoes up()
+//   up():   $table->string('pricing_type')->default('standard')->after(...)
+//   down(): $table->dropColumn('pricing_type')
+//
+// Never modify existing migrations — create a new one
+//   ❌ Edit old migration (breaks teams that already ran it)
+//   ✅ php artisan make:migration add_pricing_type_to_bookings_table
+//
+// Zero-downtime migrations for large tables:
+//   Phase 1: add nullable column (instant, no lock on large tables)
+//     $table->string('new_column')->nullable()
+//   Phase 2: background job backfills data (chunked, no lock)
+//     Booking::chunkById(1000, fn($b) → update)
+//   Phase 3: add NOT NULL constraint after backfill
+//     $table->string('new_column')->nullable(false)->change()
+//   Phase 4: drop old column (separate deploy, safe once code updated)
+//     $table->dropColumn('old_column')
+//
+// Foreign key cascade decisions:
+//   restrictOnDelete: prevent deleting school if it has bookings (safest, default)
+//   cascadeOnDelete:  delete bookings when school deleted (dangerous — think twice)
+//   nullOnDelete:     set FK = NULL when parent deleted (for optional relationships)
+// ============================================================
+
+
+
+// ============================================================
+// Database transactions and locking
+//
+// Transactions — all succeed or all roll back:
+//   DB::transaction(function() {
+//     Booking::create($data)
+//     Trip::decrement('capacity_remaining', $studentCount)
+//     Payment::create([...])
+//     event(new BookingCreated($booking))
+//   })
+//   If any step throws → entire transaction rolled back
+//
+// Optimistic locking — low-contention updates:
+//   Add: $table->unsignedInteger('version')->default(0)
+//   Update only if version matches:
+//     Trip::where('id', $tripId)->where('version', $expected)
+//       ->update(['capacity_remaining' => DB::raw('... - ' . $count), 'version' => DB::raw('version + 1')])
+//   if $updated === 0 → StaleDataException → client retries
+//   ← no row lock held, better concurrency than pessimistic
+//
+// Pessimistic locking — financial operations, high contention:
+//   DB::transaction(function() {
+//     $booking = Booking::lockForUpdate()->findOrFail($id)  ← SELECT FOR UPDATE
+//     ← other transactions wait until this commits
+//     check state → update
+//   })
+//   lockForUpdate():  SELECT FOR UPDATE (write lock)
+//   sharedLock():     SELECT LOCK IN SHARE MODE (read lock, prevents writes)
+// ============================================================
+
+
+
+// ============================================================
+// Reporting and analytics queries
+//
+// Revenue by emirate — GROUP BY with JOIN:
+//   DB::table('bookings')
+//     ->join('schools', 'bookings.school_id', '=', 'schools.id')
+//     ->select('schools.emirate', DB::raw('SUM(bookings.amount) as total_revenue'))
+//     ->where('bookings.status', 'paid')
+//     ->groupBy('schools.emirate')
+//     ->orderByDesc('total_revenue')
+//     ->get()
+//
+// Booking trend — aggregate by month:
+//   DB::table('bookings')
+//     ->select(DB::raw('YEAR(created_at)'), DB::raw('MONTH(created_at)'),
+//              DB::raw('COUNT(*) as count'), DB::raw('SUM(amount) as revenue'))
+//     ->where('status', 'paid')
+//     ->groupBy('year', 'month')
+//     ->get()
+//
+// Top schools by revenue — HAVING for post-aggregate filter:
+//   ->groupBy('schools.id', 'schools.name')
+//   ->having('revenue', '>', 10000)  ← HAVING: filter AFTER GROUP BY
+//   ->orderByDesc('revenue')
+//   ->limit(10)
+//
+// HAVING vs WHERE:
+//   WHERE: filter rows before aggregation
+//   HAVING: filter groups after aggregation
+//   Use HAVING only on aggregate expressions (SUM, COUNT, AVG)
+//
+// For complex reporting:
+//   Consider separate read replica (Aurora read replica)
+//   Consider MySQL views for commonly queried aggregates
+//   Consider data warehouse (BigQuery/Redshift) if analytics becomes primary use case
+// ============================================================

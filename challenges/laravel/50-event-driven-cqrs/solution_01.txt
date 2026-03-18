@@ -1,0 +1,132 @@
+<?php
+
+// ============================================================
+// Problem 01 — Event-Driven Architecture
+// ============================================================
+
+
+
+// ============================================================
+// Laravel Events — pub/sub within a monolith
+//
+// Domain events: immutable facts, past-tense names
+//   BookingCreated: __construct(public readonly Booking $booking, occurredAt)
+//   BookingCancelled: __construct(Booking, string $reason, occurredAt)
+//   PaymentReceived: __construct(Booking, float $amount, string $gateway)
+//
+// EventServiceProvider::$listen:
+//   BookingCreated → [
+//     SendBookingConfirmationEmail::class,  (mail)
+//     SendSmsNotification::class,           (SMS)
+//     UpdateSchoolBookingStats::class,      (cache increment)
+//     GenerateBookingPdf::class,            (S3 — queued)
+//     NotifyAdminDashboard::class,          (Reverb broadcast)
+//   ]
+//   BookingCancelled → [SendCancellationEmail, ProcessRefundJob, RestoreTripCapacity, ClearBookingCache]
+//   PaymentReceived  → [UpdateBookingStatus, SendPaymentReceipt, UpdateRevenueStats]
+//
+// Dispatch from service:
+//   event(new BookingCreated($booking))
+//   ← BookingService has zero knowledge of email, SMS, cache, PDF, broadcast
+//   ← adding new listener = zero changes to BookingService (OCP)
+// ============================================================
+
+
+
+// ============================================================
+// Queued listeners — async side effects
+//
+// GenerateBookingPdf implements ShouldQueue
+//   public string $queue   = 'pdfs'
+//   public int    $tries   = 3
+//   public int    $backoff = 60   ← retry after 60s, 120s, 240s
+//   public int    $timeout = 120  ← max 2 min
+//
+//   handle(BookingCreated $event):
+//     $pdf = PDF::loadView('pdfs.booking-confirmation', ['booking' => $event->booking])
+//     $path = "bookings/{$id}/confirmation.pdf"
+//     Storage::disk('s3')->put($path, $pdf->output())
+//     $event->booking->update(['pdf_path' => $path])
+//
+//   failed(BookingCreated $event, Throwable $e):
+//     Log::error('PDF generation failed', ['booking_id' => ..., 'error' => ...])
+//     notify admin for manual intervention
+//
+// Queue workers per type (Supervisor):
+//   laravel-worker-mail  → queue:work --queue=mail    (fast workers)
+//   laravel-worker-pdfs  → queue:work --queue=pdfs --memory=256 (heavy)
+//   laravel-worker-rt    → queue:work --queue=realtime (no delay)
+// ============================================================
+
+
+
+// ============================================================
+// Broadcasting — real-time events to frontend
+//
+// BookingStatusChanged implements ShouldBroadcast
+//   broadcastOn(): [
+//     new PrivateChannel("school.{$booking->school_id}"),
+//     new PrivateChannel("booking.{$booking->id}"),
+//   ]
+//   broadcastWith(): { booking_id, status, updated_at }  ← whitelist only
+//   broadcastAs(): 'booking.status.changed'
+//
+// routes/channels.php — authorize private channels:
+//   'school.{schoolId}':  $user->school_id === (int) $schoolId
+//   'booking.{bookingId}': $booking = Booking::find($id); $user->school_id === $booking->school_id
+//
+// Frontend (React + Echo):
+//   window.Echo.private(`booking.${bookingId}`)
+//     .listen('.booking.status.changed', (data) → setStatus(data.status))
+// ============================================================
+
+
+
+// ============================================================
+// CQRS — Command Query Responsibility Segregation
+//
+// COMMAND side — full domain validation + events:
+//   CreateBookingCommand: readonly fields (schoolId, tripId, studentCount, tripDate, email)
+//   CreateBookingHandler::handle(CreateBookingCommand): int
+//     $booking = $this->service->create([...from command...])
+//     return $booking->id
+//
+// QUERY side — optimized reads, no domain overhead:
+//   GetBookingDashboardQuery: schoolId, status, perPage
+//   GetBookingDashboardHandler::handle(): array
+//     DB::table('bookings')
+//       ->join('trips', ...)
+//       ->select('bookings.id', 'bookings.status', 'bookings.amount',
+//                'trips.title as trip_title', 'trips.destination', ...)
+//       ->where('school_id', $query->schoolId)
+//       ->when($status !== 'all', fn($q) → $q->where('status', $status))
+//       ->orderByDesc('created_at')
+//       ->paginate($perPage)
+//     return { bookings, total, pages }
+//   ← no Eloquent model overhead, single optimized JOIN, plain array
+//
+// Controller:
+//   store() → CreateBookingHandler (WRITE path)
+//   index() → GetBookingDashboardHandler (READ path)
+// ============================================================
+
+
+
+// ============================================================
+// Eventual consistency — accepting brief inconsistency
+//
+// Flow after booking created:
+//   1. Booking saved → HTTP 201 returned immediately
+//   2. Email: sent ~2s later (queue worker)
+//   3. PDF: generated ~5s later (queue worker)
+//   4. Dashboard stats: updated ~3s later (queue worker)
+//   ← all consistent eventually, never all at once
+//
+// API response acknowledges async state:
+//   { id, status, _processing: { confirmation_email: 'queued', pdf_receipt: 'generating' } }
+//   ← honest with client: don't include pdf_url until ready
+//
+// Frontend handles eventual consistency:
+//   Poll GET /bookings/42 until pdf_url is not null
+//   Or: WebSocket push when PDF ready (better UX)
+// ============================================================

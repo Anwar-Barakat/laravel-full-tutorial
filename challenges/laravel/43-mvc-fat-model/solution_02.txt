@@ -1,0 +1,136 @@
+<?php
+
+// ============================================================
+// Problem 02 — Architecture Decision Trade-offs
+// ============================================================
+
+
+
+// ============================================================
+// Where to put business logic — decision matrix
+//
+// MODEL — put here:
+//   Simple boolean flags: isPaid(), isCancellable()
+//   Derived values: outstandingBalance(), formattedAmount()
+//   Scopes: scopePending(), scopeUpcoming(), scopeForSchool()
+//   Relationships: school(), trip(), payments()
+//   State transitions that only touch own columns: markAsPaid()
+//
+// SERVICE — put here:
+//   Multi-model coordination: booking + payment + invoice
+//   External API calls: Stripe, MamoPay, SendGrid
+//   Complex workflows: confirm = charge → update → notify
+//   Operations that fire events
+//   Anything requiring injected dependencies
+//
+// CONTROLLER — put here:
+//   Parse HTTP request input
+//   Call service or repository
+//   Return HTTP response with correct status code
+//   NOTHING else — not even $booking->load() if service can do it
+//
+// REPOSITORY — put here:
+//   Database queries: findById, findBySchool, paginate
+//   Filter/sort/search logic
+//   Eager loading decisions
+//   NOT business rules — those belong in service
+// ============================================================
+
+
+
+// ============================================================
+// Trade-off: Eloquent vs Query Builder
+//
+// Eloquent (default for most queries):
+//   Booking::with(['school', 'trip'])->where('status', 'paid')->get()
+//   ✅ Full model features: events, scopes, casts, relationships
+//   ✅ Readable, expressive
+//   ❌ Model overhead for simple aggregates
+//   ❌ Harder to swap DB without rewriting (coupled to Eloquent)
+//
+// Query Builder (performance-sensitive paths):
+//   DB::table('bookings')->whereBetween(...)->sum('amount')
+//   ✅ Faster for aggregates: no model instantiation, no collection building
+//   ✅ Works without Eloquent model
+//   ❌ No model features (scopes, casts, events)
+//
+// Decision: use Eloquent by default
+//   Switch to Query Builder for: reporting, large aggregates, bulk operations
+//   Measure first (Laravel Telescope / EXPLAIN) before optimising
+// ============================================================
+
+
+
+// ============================================================
+// Trade-off: Events vs Direct calls for side effects
+//
+// Direct calls:
+//   $this->mailer->sendConfirmation($booking)
+//   $this->statsService->increment($booking)
+//   $this->cache->invalidate()
+//   ✅ Explicit, easy to trace, easy to test each step
+//   ❌ Adding 4th side effect = modifying BookingService (violates OCP)
+//   ❌ All side effects are synchronous — slows HTTP response
+//
+// Events:
+//   event(new BookingCreated($booking))
+//   ✅ Adding listener = zero changes to BookingService (OCP)
+//   ✅ Listeners can be queued (async email doesn't block HTTP)
+//   ✅ Listeners can be disabled per environment (no emails in tests)
+//   ❌ Harder to trace — must check EventServiceProvider
+//   ❌ Listener errors hidden unless onError callback configured
+//
+// Use events for: side effects, notifications, cache invalidation, async work
+// Use direct calls for: primary flow steps where order + error handling matter
+//   e.g. payment must succeed before saving booking — direct call, not event
+// ============================================================
+
+
+
+// ============================================================
+// Architecture diagram — layers and dependencies
+//
+// HTTP Layer:
+//   Routes → Middleware → Form Requests → Controllers
+//         ↓
+// Application Layer:
+//   Services (orchestrate)    Events / Listeners (side effects)
+//         ↓
+// Domain Layer:
+//   Models (Eloquent)          Repositories (data access)
+//   Contracts / Interfaces
+//         ↓
+// Infrastructure Layer:
+//   Database (MySQL)  Cache (Redis)  External APIs  Queues
+//
+// Dependency direction: HTTP → Application → Domain → Infrastructure
+// NEVER: Infrastructure → Domain
+//   ← domain stays pure and testable without infrastructure
+// ============================================================
+
+
+
+// ============================================================
+// Trade-off: Inertia.js vs API + React
+//
+// Inertia.js (SSR-friendly, full-stack Laravel)
+//   Inertia::render('Bookings/Index', ['bookings' => ..., 'filters' => ...])
+//   ✅ Shared auth (Laravel session), SSR built-in, no API versioning
+//   ✅ No CORS, no JWT, less boilerplate
+//   ✅ Single deployment: Laravel serves HTML + JSON
+//   ❌ Frontend tightly coupled to Laravel — hard to build mobile app
+//   ❌ Team cannot work fully independently on frontend
+//
+// Separate API + React (Tripz architecture)
+//   Route::apiResource('bookings', BookingController::class)
+//   ✅ Mobile app + web use same API
+//   ✅ Frontend team deploys independently
+//   ✅ Scale frontend and backend independently
+//   ❌ CORS setup, token management, API versioning overhead
+//   ❌ Two deployments, more DevOps surface
+//
+// Tripz decision: API + React because:
+//   Mobile app planned → must have API
+//   Frontend team grows independently
+//   UAE + UK markets need separate deployment regions
+// ============================================================

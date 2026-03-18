@@ -1,0 +1,249 @@
+<?php
+
+// ============================================================
+// Problem 01 — Booking Event System
+// ============================================================
+
+
+// ============================================================
+// app/Events/BookingCreated.php
+// ============================================================
+
+namespace App\Events;
+
+use App\Models\Booking;
+use Illuminate\Foundation\Events\Dispatchable;
+use Illuminate\Broadcasting\InteractsWithSockets;
+use Illuminate\Queue\SerializesModels;
+
+class BookingCreated
+{
+    use Dispatchable, InteractsWithSockets, SerializesModels;
+
+    public function __construct(public readonly Booking $booking) {}
+}
+
+
+// ============================================================
+// app/Listeners/SendBookingConfirmation.php  ← queued
+// ============================================================
+
+namespace App\Listeners;
+
+use App\Events\BookingCreated;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Support\Facades\Log;
+use Throwable;
+
+class SendBookingConfirmation implements ShouldQueue
+{
+    use InteractsWithQueue;
+
+    public string $queue   = 'notifications';
+    public int    $tries   = 3;
+    public array  $backoff = [30, 60, 120];
+
+    public function handle(BookingCreated $event): void
+    {
+        $booking = $event->booking;
+        // Mail::to($booking->school->email)->send(new BookingConfirmationMail($booking));
+    }
+
+    public function failed(BookingCreated $event, Throwable $exception): void
+    {
+        Log::error('SendBookingConfirmation failed', [
+            'booking_id' => $event->booking->id,
+            'error'      => $exception->getMessage(),
+        ]);
+    }
+}
+
+
+// ============================================================
+// app/Listeners/NotifySchoolAdmin.php  ← queued
+// ============================================================
+
+namespace App\Listeners;
+
+use App\Events\BookingCreated;
+use App\Notifications\BookingCreatedNotification;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Support\Facades\Log;
+use Throwable;
+
+class NotifySchoolAdmin implements ShouldQueue
+{
+    use InteractsWithQueue;
+
+    public string $queue   = 'notifications';
+    public int    $tries   = 3;
+    public array  $backoff = [30, 60, 120];
+
+    public function handle(BookingCreated $event): void
+    {
+        $booking = $event->booking;
+        $admin   = $booking->school->admin;          // get the user via the relationship
+        $admin->notify(new BookingCreatedNotification($booking));
+    }
+
+    public function failed(BookingCreated $event, Throwable $exception): void
+    {
+        Log::error('NotifySchoolAdmin failed', [
+            'booking_id' => $event->booking->id,
+            'error'      => $exception->getMessage(),
+        ]);
+    }
+}
+
+
+// ============================================================
+// app/Listeners/LogBookingActivity.php  ← sync, no ShouldQueue
+// ============================================================
+
+namespace App\Listeners;
+
+use App\Events\BookingCreated;
+use Illuminate\Support\Facades\Log;
+
+class LogBookingActivity
+{
+    public function handle(BookingCreated $event): void
+    {
+        $booking = $event->booking;
+        Log::info('Booking created', [
+            'booking_id' => $booking->id,
+            'status'     => $booking->status,
+            'amount'     => $booking->amount,
+        ]);
+    }
+}
+
+
+// ============================================================
+// app/Providers/EventServiceProvider.php  ← Option A: $listen array
+// ============================================================
+
+namespace App\Providers;
+
+use App\Events\BookingCreated;
+use App\Listeners\SendBookingConfirmation;
+use App\Listeners\NotifySchoolAdmin;
+use App\Listeners\LogBookingActivity;
+use Illuminate\Foundation\Support\Providers\EventServiceProvider as ServiceProvider;
+
+class EventServiceProvider extends ServiceProvider
+{
+    protected $listen = [
+        BookingCreated::class => [
+            SendBookingConfirmation::class,
+            NotifySchoolAdmin::class,
+            LogBookingActivity::class,
+        ],
+    ];
+}
+
+
+// ============================================================
+// Option B: Event::listen() inside boot()  ← same result, more flexible
+// ============================================================
+
+public function boot(): void
+{
+    Event::listen(BookingCreated::class, SendBookingConfirmation::class);
+    Event::listen(BookingCreated::class, NotifySchoolAdmin::class);
+    Event::listen(BookingCreated::class, LogBookingActivity::class);
+}
+
+
+// ============================================================
+// Option C: Auto-discovery  ← Laravel 11 default, no registration needed
+// ============================================================
+
+// Just type-hint the event in handle() — Laravel finds it automatically:
+//
+// class SendBookingConfirmation implements ShouldQueue
+// {
+//     public function handle(BookingCreated $event): void { ... }  ← this IS the registration
+// }
+//
+// Enable manually (pre-Laravel 11):
+// public function shouldDiscoverEvents(): bool { return true; }
+//
+// Run: php artisan event:list   → shows all discovered event → listener mappings
+// Run: php artisan optimize     → rebuilds the discovery cache
+
+
+// ============================================================
+// app/Services/BookingService.php  (dispatch from createBooking)
+// ============================================================
+
+namespace App\Services;
+
+use App\Events\BookingCreated;
+use App\Models\Booking;
+
+class BookingService
+{
+    public function createBooking(array $data): Booking
+    {
+        $booking = Booking::create($data);
+        event(new BookingCreated($booking));
+        return $booking;
+    }
+}
+
+
+// ============================================================
+// app/Models/Booking.php  ← alternative: model auto-dispatches
+// ============================================================
+
+// Instead of calling event() manually in the service, declare on the model:
+
+protected $dispatchesEvents = [
+    'created' => BookingCreated::class,
+];
+
+// Laravel fires this automatically after Booking::create() completes.
+// Use event() in the service when you need control over when it fires.
+// Use $dispatchesEvents when it should always fire on every model create.
+
+
+// ============================================================
+// Tips
+// ============================================================
+
+// ─── Dispatching ─────────────────────────────────────────────
+// event(new BookingCreated($booking))      → global helper
+// Event::dispatch(new BookingCreated(...)) → facade version
+// BookingCreated::dispatch($booking)       → static shortcut via Dispatchable trait
+//   all three are equivalent — pick one and stay consistent
+
+// ─── Listeners ───────────────────────────────────────────────
+// ShouldQueue          → async, runs on queue worker, does not block the response
+// no ShouldQueue       → sync, runs inline, blocks the response until done
+// InteractsWithQueue   → only add on queued listeners — gives release(), fail(), attempts()
+
+// public $queue        → which queue to push to  e.g. 'notifications'
+// public $tries        → total attempts before permanently failed
+// public $backoff      → wait between retries  [30, 60, 120] = 30s then 60s then 120s
+// failed()             → called after ALL tries exhausted — always add this to log failures
+
+// ─── Event class ─────────────────────────────────────────────
+// public readonly Booking $booking   → public so listeners read $event->booking
+//                                      readonly so nothing overwrites it after construction
+// SerializesModels                   → stores only the model ID in the queue
+//                                      re-fetches fresh data from DB when the job runs
+
+// ─── Registration ────────────────────────────────────────────
+// $listen array        → explicit, list every event → listener pair
+// Event::listen()      → same as $listen but in boot(), useful for dynamic registration
+// auto-discovery       → Laravel 11 default, reads handle() type-hint automatically
+//   php artisan event:list   → shows all registered event → listener mappings
+
+// ─── Model auto-dispatch ─────────────────────────────────────
+// $dispatchesEvents = ['created' => BookingCreated::class]
+//   Laravel fires automatically after create() / save() / delete()
+//   use event() in the service when you need control over when it fires
+//   use $dispatchesEvents when it should always fire on every model create

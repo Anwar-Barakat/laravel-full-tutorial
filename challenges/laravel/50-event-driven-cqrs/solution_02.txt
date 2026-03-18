@@ -1,0 +1,156 @@
+<?php
+
+// ============================================================
+// Problem 02 — Advanced Event-Driven Architecture
+// ============================================================
+
+
+
+// ============================================================
+// Event Sourcing — store events, derive state
+//
+// Traditional: store CURRENT state (history is lost)
+//   bookings: { id: 42, status: 'confirmed', amount: 500 }
+//
+// Event Sourcing: store EVENTS that caused state changes
+//   booking_events: { booking_id: 42, event_type: 'BookingCreated', payload, version: 1 }
+//                   { booking_id: 42, event_type: 'BookingConfirmed', payload, version: 2 }
+//                   { booking_id: 42, event_type: 'BookingCancelled', payload, version: 3 }
+//   current state = replay all events
+//
+// booking_events table:
+//   id, booking_id, event_type, payload JSON,
+//   version (1,2,3... for optimistic concurrency), correlation_id, occurred_at
+//   index: (booking_id, version), event_type, occurred_at
+//
+// BookingEventStore
+//   append(int $bookingId, string $eventType, array $payload, int $expectedVersion)
+//     lastVersion = max(version) WHERE booking_id = $bookingId
+//     if lastVersion !== expectedVersion → throw ConcurrencyException
+//     BookingEvent::create([..., 'version' => $expectedVersion + 1])
+//
+//   getEvents(int $bookingId): Collection
+//     BookingEvent::where('booking_id', $bookingId)->orderBy('version')->get()
+//
+//   ← NEVER update or delete event store records — append only
+// ============================================================
+
+
+
+// ============================================================
+// Aggregate — reconstruct from events (replay)
+//
+// BookingAggregate
+//   private fields: id, status='pending', amount=0, paymentId=null, version=0
+//
+//   static reconstitute(int $id, Collection $events): static
+//     $aggregate = new static()
+//     $aggregate->id = $id
+//     foreach $events as $event:
+//       $aggregate->apply($event->event_type, $event->payload)
+//       $aggregate->version = $event->version
+//     return $aggregate
+//
+//   private apply(string $type, array $payload): void
+//     match($type):
+//       'BookingCreated'   → applyCreated: status='pending', amount=$p['amount']
+//       'BookingConfirmed' → applyConfirmed: status='confirmed', paymentId=$p['payment_id']
+//       'BookingCancelled' → applyCancelled: status='cancelled'
+//
+// Usage:
+//   $events  = $eventStore->getEvents($bookingId)
+//   $booking = BookingAggregate::reconstitute($bookingId, $events)
+//   echo $booking->status   ← derived by replaying all events
+// ============================================================
+
+
+
+// ============================================================
+// Projections — materialised read models
+//
+// Problem: replaying 1000 events on every read is slow
+//
+// Solution: projection = pre-computed read model kept in sync
+//
+// booking_summaries table (optimised for reading):
+//   booking_id UNIQUE, school_name, trip_title, status,
+//   amount, trip_date, student_count, last_event_at
+//   index: (status, trip_date)
+//
+// BookingProjector
+//   onBookingCreated(array $payload):
+//     BookingSummary::create([all fields from payload])
+//
+//   onBookingConfirmed(array $payload):
+//     BookingSummary::where('booking_id', ...)->update(['status' => 'confirmed', ...])
+//
+//   onBookingCancelled(array $payload):
+//     BookingSummary::where('booking_id', ...)->update(['status' => 'cancelled', ...])
+//
+//   rebuild(): void
+//     BookingSummary::truncate()  ← wipe read model
+//     BookingEvent::orderBy('occurred_at')->each(fn($event) → call on{EventType}($payload))
+//     ← key advantage: rebuild any read model from event log at any time
+//     ← traditional DB: once updated/deleted, history is gone forever
+// ============================================================
+
+
+
+// ============================================================
+// Outbox pattern — reliable event publishing
+//
+// Problem: save to DB + publish event — what if app crashes between?
+//   DB save succeeds, event never published → inconsistency
+//
+// Solution: write event to outbox IN SAME DB TRANSACTION as entity
+//   BookingService::create(array $data): Booking
+//     DB::transaction(function() {
+//       $booking = Booking::create($data)
+//       OutboxEvent::create([
+//         'aggregate_type' => 'booking',
+//         'aggregate_id'   => $booking->id,
+//         'event_type'     => 'BookingCreated',
+//         'payload'        => json_encode([booking_id, amount, school_id]),
+//         'published'      => false,
+//       ])
+//       return $booking
+//     })
+//   ← if transaction rolls back, outbox entry also rolls back → always consistent
+//
+// Outbox poller (scheduled job, every 5 seconds):
+//   OutboxEvent::where('published', false)->orderBy('created_at')->limit(100)->get()
+//     foreach: Queue::pushRaw($outbox->payload, $outbox->event_type)
+//              $outbox->update(['published' => true, 'published_at' => now()])
+//
+//   ✅ Atomicity: DB write + event always consistent
+//   ✅ At-least-once: unpublished events retried on next poll
+//   ❌ ~5s delay between DB write and event published
+//   ❌ Duplicate events possible → consumers must be idempotent
+//     (check payment ID or booking ID before processing to detect duplicates)
+// ============================================================
+
+
+
+// ============================================================
+// When to use Event Sourcing
+//
+// ✅ USE when:
+//   Full audit trail required by law (financial, healthcare, legal)
+//   Time-travel debugging needed ("what was the state on Jan 15?")
+//   Complex domain with many state transitions needing history
+//   Multiple read models from same events (different projections)
+//   Rollback/undo is a first-class feature
+//
+// ❌ DO NOT USE when:
+//   Simple CRUD (massive overhead for no benefit)
+//   Team unfamiliar (steep learning curve)
+//   External systems need to update the record (syncing hard)
+//   High-frequency updates: GPS position every second = millions of events
+//
+// Tripz pragmatic approach:
+//   Add booking_events audit table (append-only log)
+//   Keep bookings table as current state (traditional)
+//   ← NOT full event sourcing, but gives audit + time-travel debugging
+//   ← Full event sourcing only if projections and event replay are required
+//   ← Payments: legal requirement → event sourcing a good fit here
+// ============================================================

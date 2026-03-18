@@ -1,0 +1,46 @@
+<?php
+
+// ============================================================
+// Problem 02 — Permission Management API
+// ============================================================
+
+
+
+// ============================================================
+// app/Http/Controllers/Admin/RoleController.php
+// (store — DB::transaction + sync + AuditLog)
+// (syncPermissions — sync + flush all role users' cache)
+// ============================================================
+
+
+
+// ============================================================
+// app/Http/Controllers/Admin/UserRoleController.php
+// (store — syncWithoutDetaching, destroy — last-admin guard)
+// ============================================================
+
+
+
+// ============================================================
+// app/Http/Controllers/Admin/PermissionMatrixController.php
+// (index — role × permission boolean grid)
+// ============================================================
+
+
+
+// ============================================================
+// app/Models/AuditLog.php  (record() static helper)
+// ============================================================
+
+
+
+// ============================================================
+// routes/api.php  (admin role/permission/user routes)
+// ============================================================
+
+
+
+// ============================================================
+// tests/Feature/RbacAdminTest.php
+// (sync flushes cache, last-admin 422, matrix shape, gate from DB)
+// ============================================================

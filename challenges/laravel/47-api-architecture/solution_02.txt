@@ -1,0 +1,150 @@
+<?php
+
+// ============================================================
+// Problem 02 — Advanced API Architecture
+// ============================================================
+
+
+
+// ============================================================
+// GraphQL with Lighthouse — when REST isn't enough
+//
+// When to use GraphQL:
+//   Multiple clients needing different field sets (mobile vs web)
+//   Under-fetching: mobile needs 3 fields, REST returns 50
+//   Over-fetching: client must JOINs data from 3 REST endpoints
+//   Rapid iteration: add field without new endpoint
+//
+// When to stay with REST:
+//   Simple CRUD API (no benefit)
+//   CDN caching needed (GraphQL POST requests aren't cached)
+//   Team unfamiliar — learning curve is real
+//   Tripz: stay REST (simple enough, CDN caching needed)
+//
+// Lighthouse setup:
+//   composer require nuwave/lighthouse
+//   schema.graphql: types + queries + mutations
+//
+// type Booking { id, status, amount, tripDate, school: School @belongsTo, ... }
+// type Query { booking(id: ID! @find): Booking }
+//             { bookings(school_id: ID @where, status: String @where): [Booking!]! @paginate }
+// type Mutation { createBooking(input: CreateBookingInput! @spread): Booking @create }
+//
+// Client queries only what it needs — no over-fetching:
+//   query { bookings(school_id: 1) { data { id tripDate trip { title } } } }
+//
+// N+1 protection:
+//   Lighthouse auto-batches related queries with DataLoader
+//   Multiple bookings → trips resolved in single SELECT IN query
+//   ← key advantage over naive REST
+// ============================================================
+
+
+
+// ============================================================
+// Rate limiting — per endpoint, per user
+//
+// RateLimiter::for('api', fn($request) →
+//   authenticated: Limit::perMinute(120)->by($request->user()->id)
+//   unauthenticated: Limit::perMinute(20)->by($request->ip())
+//
+// RateLimiter::for('booking-creation', fn($request) → [
+//   Limit::perMinute(5)->by(userId),   ← 5 bookings/minute
+//   Limit::perDay(50)->by(userId),     ← 50 bookings/day
+// ])
+//
+// RateLimiter::for('payment', fn($request) →
+//   Limit::perMinute(3)->by(userId)    ← 3 payment attempts/minute
+//
+// Route::post('/bookings', ...)->middleware('throttle:booking-creation')
+// Route::post('/bookings/{booking}/pay', ...)->middleware('throttle:payment')
+//
+// Response headers (automatic):
+//   X-RateLimit-Limit:     120
+//   X-RateLimit-Remaining: 87
+//   Retry-After: 60        ← only on 429 response
+// ============================================================
+
+
+
+// ============================================================
+// API authentication — Sanctum SPA + mobile
+//
+// SPA (same-domain React): cookie-based sessions
+//   POST /login → Auth::attempt() → session()->regenerate()
+//   ← no token management, CSRF protected automatically
+//
+// Mobile: Bearer token
+//   POST /tokens/create → validate credentials
+//   → $user->createToken($deviceName, ['booking:create', 'booking:read'], now()->addDays(30))
+//   → return $token->plainTextToken
+//   ← store securely on device, send as Authorization: Bearer {token}
+//
+// Check ability on protected routes:
+//   abort_unless($request->user()->tokenCan('booking:create'), 403)
+//
+// Token refresh / rotation:
+//   POST /tokens/refresh
+//   $request->user()->currentAccessToken()->delete()  ← revoke old
+//   $user->createToken($deviceName, ['*'], now()->addDays(30))
+//   ← rolling window: every refresh extends 30 days
+// ============================================================
+
+
+
+// ============================================================
+// OpenAPI / Swagger documentation
+//
+// composer require dedoc/scramble
+//   ← auto-generates OpenAPI from routes + FormRequests + Resources
+//   ← no annotations needed on most endpoints
+//
+// config/scramble.php:
+//   api_path: 'api/v1'  ← document this prefix only
+//   info.title: 'Tripz Booking API'
+//   info.version: '1.0.0'
+//
+// Scramble reads:
+//   Route definitions → paths
+//   FormRequest rules → request body schema
+//   JsonResource toArray() → response schema
+//   PHPDoc @response comments → error responses
+//
+// Access: GET /docs/api  (Scalar interactive UI)
+// OpenAPI JSON: GET /docs/api.json  (for Postman import)
+//
+// Custom error response documentation:
+//   @response 422 { "error": { "message": "...", "status": 422 } }
+// ============================================================
+
+
+
+// ============================================================
+// Idempotency — safe retry on payment endpoints
+//
+// Problem: mobile retries payment due to network timeout
+//   Was first request processed? Did we double-charge?
+//
+// Solution: Idempotency-Key header
+//   Client sends: Idempotency-Key: {uuid-unique-per-attempt}
+//   Same key = same response (even if retried 100×)
+//
+// IdempotencyMiddleware:
+//   read $key = $request->header('Idempotency-Key')
+//   if no key → pass through (not required on all endpoints)
+//   $cacheKey = "idempotency:{$userId}:{$key}"
+//
+//   if Cache::get($cacheKey):
+//     return cached response + X-Idempotent-Replayed: true header
+//
+//   $response = $next($request)
+//
+//   if status < 500 → Cache::put($cacheKey, {body, status}, 24 hours)
+//
+//   return $response
+//
+// Route::post('/bookings/{booking}/pay', ...)->middleware(IdempotencyMiddleware::class)
+//
+// ← client retries with same key → gets same response, no double charge
+// ← only cache non-5xx responses (5xx = server error, may be transient)
+// ============================================================

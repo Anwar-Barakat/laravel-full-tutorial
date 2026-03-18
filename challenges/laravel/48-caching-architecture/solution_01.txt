@@ -1,0 +1,175 @@
+<?php
+
+// ============================================================
+// Problem 01 — Caching Strategy
+// ============================================================
+
+
+
+// ============================================================
+// Cache layers — from browser to database
+//
+// Layer 1: Browser cache
+//   Cache-Control: public, max-age=31536000 (versioned static assets: JS/CSS)
+//   Cache-Control: private, max-age=300 (user-specific API responses)
+//   ETag + If-None-Match: conditional requests → 304 Not Modified if unchanged
+//
+// Layer 2: CDN (Cloudflare)
+//   Caches: static assets (1 year), public trip listings (1 hour)
+//   Vary: Authorization header → different cached response per auth token
+//   Invalidation: CF cache purge on trip update, cache tag purge
+//
+// Layer 3: Application cache (Redis)
+//   Caches: query results, aggregates, sessions, rate limit counters
+//   TTL: 3600 trips, 300 user data, 86400 static config
+//   Invalidation: tagged caches, key-based forget, flush
+//
+// Layer 4: Database (MySQL buffer pool)
+//   Frequently-queried index pages stay in memory automatically
+//   Indexed queries hit in-memory B-tree nodes — effectively "cached"
+//   MySQL query cache: deprecated in 8.0 → use Redis instead
+// ============================================================
+
+
+
+// ============================================================
+// Cache-aside pattern (lazy loading) — most common in Laravel
+//
+// Pattern: check cache → if miss → query DB → populate cache
+//
+// CachedTripRepository implements TripRepositoryInterface
+//   __construct(TripRepositoryInterface $inner, Repository $cache)
+//
+//   getActive(): Collection
+//     Cache::tags(['trips'])->remember('trips:active', 3600,
+//       fn() → $this->inner->getActive())
+//
+//   findById(int $id): ?Trip
+//     Cache::tags(['trips'])->remember("trip:{$id}", 1800,
+//       fn() → $this->inner->findById($id))
+//
+//   create(array $data): Trip
+//     $trip = $this->inner->create($data)
+//     Cache::tags(['trips'])->flush()  ← invalidate ALL trip caches on write
+//     return $trip
+//
+//   update(int $id, array $data): Trip
+//     $trip = $this->inner->update($id, $data)
+//     Cache::tags(['trips'])->flush()  ← or: forget("trip:{$id}") for granular
+//     return $trip
+//
+// Granular vs full flush trade-off:
+//   Full flush: simple but invalidates more than needed
+//   Granular forget: only invalidates changed key but list may stay stale
+//   Recommendation: full flush for write-light APIs, granular for write-heavy
+// ============================================================
+
+
+
+// ============================================================
+// Cache key naming conventions
+//
+// Pattern: {entity}:{id}:{variant}:{version}
+//
+// Examples:
+//   'trip:42'                    ← single trip
+//   'trips:active'               ← all active trips
+//   'trips:active:page:2'        ← paginated
+//   'school:7:bookings:pending'  ← scoped to school + status
+//   'report:revenue:2026:01'     ← report with period
+//   'user:123:bookings:recent'   ← user-specific (short TTL)
+//
+// CacheKey helper class:
+//   static trip(int $id): string → "trip:{$id}"
+//   static trips(string $variant, int $page): string → "trips:{$variant}:page:{$page}"
+//   static schoolBookings(int $schoolId, string $status): string → ...
+//   ← consistent key generation, easy to find and delete related keys
+//
+// Tagged cache groups (Redis / Memcached only):
+//   Cache::tags(['trips']) → group all trip-related keys
+//   Cache::tags(['trips', 'school:7']) → intersection
+//   Cache::tags(['trips'])->flush() → invalidate all trip entries at once
+//   ← file/database cache drivers do NOT support tags
+// ============================================================
+
+
+
+// ============================================================
+// TTL strategy
+//
+// Long TTL (hours–days) — shared across all users, infrequently changed:
+//   trip listings:   3600s (1 hour)
+//   trip details:    1800s (30 min)
+//   school list:     3600s (1 hour)
+//   static config:   86400s (24 hours)
+//   generated PDFs:  3600s (1 hour, rebuild on demand)
+//
+// Short TTL (seconds–minutes) — user-specific or frequently changing:
+//   user's bookings: 300s (5 min)
+//   dashboard stats: 60s  (1 min — near real-time)
+//   availability:    30s  (booking pressure visible quickly)
+//
+// Never cache:
+//   Payment status (real-time), auth tokens (security),
+//   CSRF tokens (security), current booking state (race conditions)
+//
+// remember() → expires after TTL (preferred — gives auto-healing)
+// rememberForever() → never expires (only for truly static data)
+//
+// Cache::flexible() — Laravel 11: serve stale, refresh in background
+//   Cache::flexible('trips:active', [30, 300], fn() → Trip::active()->get())
+//   [30, 300]: serve up to 30s stale; hard expire at 300s
+//   ← eliminates cache stampede for high-traffic keys
+// ============================================================
+
+
+
+// ============================================================
+// HTTP cache headers
+//
+// Middleware: ApiCacheHeaders
+//   handle($request, $next, $visibility = 'private', $maxAge = 300)
+//   response->headers->set('Cache-Control', "{$visibility}, max-age={$maxAge}")
+//   response->headers->set('Vary', 'Authorization, Accept')
+//   ← Vary: CDN creates separate cache per Authorization value
+//   ← prevents User A's response being served to User B
+//
+//   ETag: md5 of response content
+//   If client sends If-None-Match matching ETag → return 304 Not Modified
+//   ← saves bandwidth: client uses its own cached copy
+//
+// Apply:
+//   GET /trips → middleware('cache.headers:public,3600')  ← CDN caches
+//   GET /bookings → middleware('cache.headers:private,300')  ← browser only
+//
+// Static assets:
+//   Vite/Mix version in filename: /js/app.abc123.js
+//   Cache-Control: public, max-age=31536000, immutable
+//   ← unique URL per build = forever cacheable
+// ============================================================
+
+
+
+// ============================================================
+// Redis data structures
+//
+// String: basic key/value (most cache entries)
+//   Cache::put('trip:42', $tripData, 3600)
+//
+// Hash: group related fields — update one field without deserializing whole object
+//   Redis::hset('trip:42:meta', 'capacity_remaining', 45)
+//   Redis::hget('trip:42:meta', 'capacity_remaining')
+//
+// Set: unique members — track viewers
+//   Redis::sadd("trip:42:viewers", $userId)
+//   Redis::scard("trip:42:viewers")  ← unique count
+//
+// Sorted Set: rankings / leaderboard
+//   Redis::zadd('popular:trips', ['trip:42' => $viewCount])
+//   Redis::zrevrange('popular:trips', 0, 9)  ← top 10
+//
+// List: bounded recent activity feed
+//   Redis::lpush("school:{$id}:activity", json_encode($data))
+//   Redis::ltrim("school:{$id}:activity", 0, 99)  ← keep last 100
+//   Redis::lrange("school:{$id}:activity", 0, 19) ← get latest 20
+// ============================================================

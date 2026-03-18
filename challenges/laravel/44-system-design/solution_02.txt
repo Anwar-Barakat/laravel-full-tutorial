@@ -1,0 +1,130 @@
+<?php
+
+// ============================================================
+// Problem 02 — Advanced System Design
+// ============================================================
+
+
+
+// ============================================================
+// Capacity estimation
+//
+// Peak load:
+//   1,000 schools × 3 bookings in peak week
+//   = 3,000 bookings / 5 days = 600/day = 75/hour = 1.25/second
+//
+// Read traffic (10:1 ratio):
+//   12.5 reads/second at peak
+//   Each read ≈ 50ms DB + 10ms cache = 60ms avg
+//
+// Storage:
+//   Each booking: ~1KB in DB
+//   1M bookings/year × 1KB = 1GB/year — trivial
+//   PDFs: 100KB × 1M = 100GB/year → S3 ($2.30/month per 100GB)
+//
+// DB sizing:
+//   5 years × 1M bookings/year = 5M rows
+//   At 1KB/row = 5GB — single MySQL instance, no sharding needed
+//
+// Conclusion: vertical scaling sufficient for 5+ years
+//   single RDS db.t3.medium (~$50/month) handles this load
+// ============================================================
+
+
+
+// ============================================================
+// Failure scenarios and handling
+//
+// Scenario 1: Payment gateway down
+//   ProcessPaymentHandler catches PaymentGatewayException
+//   Mark booking status = 'payment_failed' (don't lose booking)
+//   Dispatch RetryPaymentJob::delay(now()->addMinutes(5))
+//   Log error with booking_id and error message
+//   Throw exception → HTTP 422 response
+//   ← client can retry; booking is preserved for retry
+//
+// Scenario 2: Double-booking race condition
+//   Two schools book last slot simultaneously
+//   Fix: DB transaction + pessimistic lock
+//     DB::transaction(function() {
+//       $trip = Trip::lockForUpdate()->findOrFail($tripId)  ← SELECT FOR UPDATE
+//       if capacity < studentCount → throw InsufficientCapacityException
+//       create booking
+//       $trip->decrement('capacity_remaining', $studentCount)
+//     })
+//   ← second request waits for lock, then sees 0 capacity → exception
+//   ← no overselling possible
+//
+// Scenario 3: Queue worker crashes mid-job
+//   SendBookingConfirmationEmail implements ShouldQueue
+//   $tries = 3, $backoff = 60  ← auto-retry on failure
+//   failed(Throwable $e): void
+//     ← after all retries: mark booking email_failed = true
+//     ← notify admin via admin email notification
+//   ← no silent failure; admin can resend manually
+// ============================================================
+
+
+
+// ============================================================
+// Monitoring and observability
+//
+// Local dev: Laravel Telescope
+//   Query inspection, job tracking, mail preview, request details
+//
+// Production: Laravel Horizon
+//   Queue monitoring, throughput, failed job dashboard
+//   Alert when queue depth > 500
+//
+// Structured logging — every booking event:
+//   Log::channel('bookings')->info('Booking created', [
+//     'booking_id'  => $booking->id,
+//     'school_id'   => $booking->school_id,
+//     'amount'      => $booking->amount,
+//     'duration_ms' => $duration,
+//     'request_id'  => request()->header('X-Request-ID'),
+//   ])
+//   Ship to Datadog / Papertrail — searchable, alertable
+//
+// Health check endpoint: GET /health
+//   db:    DB::connection()->getPdo() ? 'ok' : 'error'
+//   cache: Cache::store('redis')->ping() ? 'ok' : 'error'
+//   queue: Queue::size('default') < 1000 ? 'ok' : 'backlogged'
+//   ← ALB health checks hit this every 30s
+//   ← Cloudflare removes unhealthy instance from rotation
+//
+// Metrics to alert on:
+//   Response time p99 > 500ms → investigate slow queries
+//   Queue depth > 500 → add worker instances
+//   Error rate > 1% → page on-call
+//   DB connections > 80% pool → scale read replicas
+//
+// APM: Sentry for distributed tracing
+//   X-Request-ID header → trace request through logs + queue jobs
+// ============================================================
+
+
+
+// ============================================================
+// Scalability roadmap
+//
+// Current (0–10k schools):
+//   Single MySQL + Redis + 2 app servers
+//   RDS db.t3.medium (~$50/month) handles this
+//
+// Growth (10k–100k):
+//   Add read replicas → 80% reads off primary
+//   Add Octane → remove ~15ms bootstrap per request
+//   Horizon for queue monitoring
+//
+// Scale (100k+):
+//   Separate reporting DB (Aurora read replica for heavy exports)
+//   Trip catalog → Elasticsearch (full-text search, faceted filters)
+//   Multi-region if UK + UAE simultaneously (data residency)
+//
+// Never needed for Tripz (over-engineering):
+//   Microservices — overkill for team of 3, adds operational complexity
+//   Kafka — SQS handles our throughput easily (1.25 writes/second)
+//   Database sharding — 5M rows/year fits one MySQL for 10+ years
+//   GraphQL — REST + resources covers our use case without the complexity
+// ============================================================

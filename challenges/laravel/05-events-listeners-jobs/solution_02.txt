@@ -1,0 +1,356 @@
+    <?php
+
+    // ============================================================
+    // Problem 02 — Queued Jobs with Chains & Batches
+    // ============================================================
+
+
+    // ============================================================
+    // app/Exceptions/PaymentException.php
+    // ============================================================
+
+    namespace App\Exceptions;
+
+    enum PaymentError
+    {
+        case GatewayTimeout;  // 408 — gateway too slow
+        case CardDeclined;    // card rejected by bank
+        case RateLimit;       // 429 — too many requests
+    }
+
+    class PaymentException extends \Exception
+    {
+        public function __construct(public readonly PaymentError $error)
+        {
+            parent::__construct(match($this->error) {
+                PaymentError::GatewayTimeout => 'Gateway timed out',
+                PaymentError::CardDeclined   => 'Card was declined',
+                PaymentError::RateLimit      => 'Rate limit hit',
+            });
+        }
+    }
+
+
+    // ============================================================
+    // app/Services/PaymentService.php
+    // ============================================================
+
+    namespace App\Services;
+
+    use App\Exceptions\PaymentError;
+    use App\Exceptions\PaymentException;
+    use Illuminate\Support\Facades\Http;
+
+    class PaymentService
+    {
+        public function charge(float $amount, string $currency): void
+        {
+            $response = Http::post('https://gateway.com/charge', [
+                'amount'   => $amount,
+                'currency' => $currency,
+            ]);
+
+            match(true) {
+                $response->status() === 408             => throw new PaymentException(PaymentError::GatewayTimeout),
+                $response->json('error') === 'declined' => throw new PaymentException(PaymentError::CardDeclined),
+                $response->status() === 429             => throw new PaymentException(PaymentError::RateLimit),
+                default                                 => null,
+            };
+        }
+    }
+
+
+    // ============================================================
+    // app/Jobs/ProcessPaymentJob.php
+    // ============================================================
+
+    namespace App\Jobs;
+
+    use App\Exceptions\PaymentError;
+    use App\Exceptions\PaymentException;
+    use App\Models\Booking;
+    use App\Services\PaymentService;
+    use Illuminate\Bus\Batchable;
+    use Illuminate\Bus\Queueable;
+    use Illuminate\Contracts\Queue\ShouldQueue;
+    use Illuminate\Foundation\Bus\Dispatchable;
+    use Illuminate\Queue\InteractsWithQueue;
+    use Illuminate\Queue\SerializesModels;
+    use Illuminate\Support\Facades\Log;
+    use Throwable;
+
+    class ProcessPaymentJob implements ShouldQueue
+    {
+        use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, Batchable;
+
+        public int   $tries   = 3;
+        public array $backoff = [30, 60, 120];
+
+        public function __construct(
+            public readonly Booking $booking,
+            private PaymentService  $service,
+        ) {}
+
+        public function handle(): void
+        {
+            if ($this->batch()?->cancelled()) return;
+
+            try {
+                $this->service->charge($this->booking->amount, 'AED');
+                $this->booking->update(['status' => 'paid']);
+
+            } catch (PaymentException $e) {
+                match($e->error) {
+                    PaymentError::GatewayTimeout => $this->release(30),
+                    PaymentError::RateLimit      => $this->release($this->attempts() * 60),
+                    PaymentError::CardDeclined   => $this->fail($e),
+                };
+            }
+        }
+
+        public function failed(Throwable $exception): void
+        {
+            Log::error('ProcessPaymentJob failed', [
+                'booking_id' => $this->booking->id,
+                'error'      => $exception->getMessage(),
+            ]);
+
+            $this->booking->update(['status' => 'payment_failed']);
+        }
+    }
+
+
+    // ============================================================
+    // app/Jobs/GenerateBookingPdfJob.php
+    // ============================================================
+
+    namespace App\Jobs;
+
+    use App\Models\Booking;
+    use App\Notifications\BookingPdfGeneratedNotification;
+    use Illuminate\Bus\Batchable;
+    use Illuminate\Bus\Queueable;
+    use Illuminate\Contracts\Queue\ShouldQueue;
+    use Illuminate\Foundation\Bus\Dispatchable;
+    use Illuminate\Queue\InteractsWithQueue;
+    use Illuminate\Queue\SerializesModels;
+    use Illuminate\Support\Facades\Log;
+    use Throwable;
+
+    class GenerateBookingPdfJob implements ShouldQueue
+    {
+        use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, Batchable;
+
+        public int   $tries   = 3;
+        public array $backoff = [30, 60, 120];
+
+        public function __construct(public readonly Booking $booking) {}
+
+        public function handle(): void
+        {
+            if ($this->batch()?->cancelled()) return;
+
+            // $pdf = PDF::loadView('bookings.receipt', ['booking' => $this->booking]);
+            // Storage::put("pdfs/booking-{$this->booking->id}.pdf", $pdf->output());
+
+            $this->booking->school?->admin->notify(new BookingPdfGeneratedNotification($this->booking));
+        }
+
+        public function failed(Throwable $exception): void
+        {
+            Log::error('GenerateBookingPdfJob failed', [
+                'booking_id' => $this->booking->id,
+                'error'      => $exception->getMessage(),
+            ]);
+        }
+    }
+
+
+    // ============================================================
+    // app/Jobs/SendConfirmationEmailJob.php
+    // ============================================================
+
+    namespace App\Jobs;
+
+    use App\Models\Booking;
+    use Illuminate\Bus\Batchable;
+    use Illuminate\Bus\Queueable;
+    use Illuminate\Contracts\Queue\ShouldQueue;
+    use Illuminate\Foundation\Bus\Dispatchable;
+    use Illuminate\Queue\InteractsWithQueue;
+    use Illuminate\Queue\SerializesModels;
+    use Illuminate\Support\Facades\Log;
+    use Throwable;
+
+    class SendConfirmationEmailJob implements ShouldQueue
+    {
+        use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, Batchable;
+
+        public int   $tries   = 3;
+        public array $backoff = [30, 60, 120];
+
+        public function __construct(public readonly Booking $booking) {}
+
+        public function handle(): void
+        {
+            if ($this->batch()?->cancelled()) return;
+
+            // Mail::to($this->booking->school->email)
+            //     ->send(new BookingConfirmationMail($this->booking));
+        }
+
+        public function failed(Throwable $exception): void
+        {
+            Log::error('SendConfirmationEmailJob failed', [
+                'booking_id' => $this->booking->id,
+                'error'      => $exception->getMessage(),
+            ]);
+        }
+    }
+
+
+    // ============================================================
+    // app/Services/BookingService.php  (chain + batch dispatch)
+    // ============================================================
+
+    namespace App\Services;
+
+    use App\Jobs\GenerateBookingPdfJob;
+    use App\Jobs\ProcessPaymentJob;
+    use App\Jobs\SendConfirmationEmailJob;
+    use App\Models\Booking;
+    use Illuminate\Bus\Batch;
+    use Illuminate\Support\Facades\Bus;
+    use Illuminate\Support\Facades\Log;
+    use Throwable;
+
+    class BookingService
+    {
+        // Sequential chain — one booking, 3 steps in order
+        public function processBooking(Booking $booking): void
+        {
+            Bus::chain([
+                new ProcessPaymentJob($booking),
+                new GenerateBookingPdfJob($booking),
+                new SendConfirmationEmailJob($booking),
+            ])->onQueue('bookings')->dispatch();
+        }
+
+        // Parallel batch — multiple bookings processed at the same time
+        public function processBatch(array $bookings): void
+        {
+            $chains = collect($bookings)->map(fn(Booking $booking) => [
+                new ProcessPaymentJob($booking),
+                new GenerateBookingPdfJob($booking),
+                new SendConfirmationEmailJob($booking),
+            ])->all();
+
+            Bus::batch($chains)
+                ->then(fn(Batch $batch) => Log::info("Batch {$batch->id} completed."))
+                ->catch(fn(Batch $batch, Throwable $e) => Log::error('Batch failed', [
+                    'batch_id' => $batch->id,
+                    'error'    => $e->getMessage(),
+                ]))
+                ->finally(fn(Batch $batch) => Log::info("Batch {$batch->id} finished.", [
+                    'total'  => $batch->totalJobs,
+                    'failed' => $batch->failedJobs,
+                ]))
+                ->allowFailures()
+                ->onQueue('bookings')
+                ->dispatch();
+        }
+    }
+
+
+    // ============================================================
+    // database  — required migration for batches
+    // ============================================================
+
+    // php artisan queue:batches-table   → generates the job_batches migration
+    // php artisan migrate               → run after the above
+
+
+    // ============================================================
+    // Tips
+    // ============================================================
+
+    // ─── Job traits ──────────────────────────────────────────────
+    // Dispatchable       → static ::dispatch() shortcut
+    // InteractsWithQueue → $this->release(), $this->fail(), $this->attempts()
+    // Queueable          → ->onQueue(), ->delay() when dispatching
+    // SerializesModels   → stores model ID in queue, re-fetches fresh from DB when job runs
+    // Batchable          → MUST add when job is used inside Bus::batch()
+
+    // ─── Retry config ────────────────────────────────────────────
+    // public $tries   = 3              → total attempts before permanently failed
+    // public $backoff = [30, 60, 120]  → wait 30s, then 60s, then 120s between retries
+    // failed(Throwable $e)             → called after ALL tries exhausted — always log here
+    // $this->release(30)  → retry in 30s    — TEMPORARY failure (timeout, rate limit)
+    // $this->fail($e)     → stop retrying   — PERMANENT failure (card declined)
+    // $this->attempts()   → how many times this job has run  (1, 2, 3...)
+
+    // ─── Batchable ───────────────────────────────────────────────
+    // $this->batch()               → returns Batch object, or null if job is standalone
+    // $this->batch()?->cancelled() → check at TOP of handle() before doing any work
+    //   ?->  nullsafe — prevents crash when job is dispatched outside a batch
+    //   without check → job runs even if batch was cancelled  ❌
+    //   with check    → returns early, does nothing           ✓
+
+    // ─── Chain vs Batch ──────────────────────────────────────────
+    // Bus::chain([a, b, c])          → sequential — b runs only if a succeeded
+    //   one failure cancels all remaining jobs in the chain
+    //   use for DEPENDENT steps: payment → pdf → email
+
+    // Bus::batch([a, b, c])          → parallel — all run at the same time
+    //   default: one failure cancels the entire batch
+    //   ->allowFailures()            → one failure does NOT stop the rest
+
+    // Bus::batch([[a1,b1], [a2,b2]]) → parallel chains
+    //   inner array = sequential chain per booking
+    //   outer batch = all chains run in parallel
+
+    // ─── Batch callbacks ─────────────────────────────────────────
+    // ->then()    → ALL jobs succeeded
+    // ->catch()   → FIRST failure — only receives $batch and $e, nothing else
+    // ->finally() → ALWAYS runs at the end, pass or fail
+    //   fn body cannot be empty:  fn(Batch $b) =>  ❌  fn(Batch $b) => Log::info() ✓
+
+    // $batch->id          → UUID of the batch
+    // $batch->totalJobs   → total jobs in the batch
+    // $batch->failedJobs  → how many failed
+    // $batch->finished()  → true when all done
+
+    // ─── Exceptions ──────────────────────────────────────────────
+    // Exception class = just a label — gives each error a unique type so catch can tell them apart
+    // extending \Exception makes it catchable — empty body is enough for simple cases
+    //
+    // old way → 3 separate empty classes (one file each)
+    //   class GatewayTimeoutException extends \Exception {}
+    //   class CardDeclinedException    extends \Exception {}
+    //   class RateLimitException       extends \Exception {}
+    //   → 3 catches in the job to handle each separately
+    //
+    // new way (PHP 8.1+) → one enum + one exception class
+    //   enum PaymentError { case GatewayTimeout; case CardDeclined; case RateLimit; }
+    //   class PaymentException extends \Exception { public PaymentError $error }
+    //   → ONE catch(PaymentException) + match($e->error) inside
+    //   → adding a new error = one new enum case, not a new file
+    //
+    // PaymentService  → detects the API response and THROWS the right exception
+    // ProcessPaymentJob → CATCHES it and decides: release() / fail()
+    // Exception class itself does nothing — it is just the label between them
+    //
+    // throw   → only works inside service/job — sends the error up the call stack
+    // catch   → intercepts it — you decide what to do (retry, fail, log)
+    // match on $e->error → reads the enum case to pick the right action
+
+    // ─── collect ─────────────────────────────────────────────────
+    // collect()  → enter Collection world (can chain map, filter, etc.)
+    // ->all()    → exit Collection world  (back to plain PHP array)
+    // ->map()    → always returns a Collection — call ->all() only at the very end
+
+    // ─── Artisan ─────────────────────────────────────────────────
+    // php artisan queue:batches-table          → creates job_batches table (required)
+    // php artisan queue:work --queue=bookings  → start worker on the 'bookings' queue
+    // php artisan queue:failed                 → list permanently failed jobs
+    // php artisan queue:retry all              → retry all failed jobs

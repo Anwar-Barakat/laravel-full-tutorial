@@ -1,0 +1,148 @@
+<?php
+
+// ============================================================
+// Problem 02 — Advanced Caching
+// ============================================================
+
+
+
+// ============================================================
+// Cache stampede — prevent dog-pile effect
+//
+// Problem: cache expires → 1,000 concurrent requests all miss
+//   → 1,000 simultaneous expensive DB queries → database overload
+//
+// Solution 1: Cache::lock() — only one process rebuilds cache
+//   $key  = 'trips:active'
+//   $lock = Cache::lock("lock:{$key}", 10)  ← 10 second TTL on lock
+//
+//   if ($data = Cache::get($key)) → return data  (fast path)
+//
+//   try $lock->block(5):  ← wait up to 5s for lock
+//     double-check: if Cache::get($key) → return it (another process built it)
+//     $data = $this->inner->getActive()
+//     Cache::put($key, $data, 3600)
+//     return $data
+//   finally $lock->release()
+//
+//   ← only first process rebuilds; others wait then use fresh cache
+//
+// Solution 2: Cache::flexible() — Laravel 11 (recommended)
+//   Cache::flexible('trips:active', [30, 300], fn() → Trip::active()->get())
+//   [30, 300]: serve stale for up to 30s while background refresh runs
+//              hard expire and rebuild synchronously after 300s
+//   ← no lock needed, no thundering herd, no waiting
+//   ← best for high-traffic keys
+// ============================================================
+
+
+
+// ============================================================
+// Write-through and write-behind patterns
+//
+// Write-through: write to cache AND database simultaneously
+//   update(int $id, array $data): Trip
+//     $trip = $this->inner->update($id, $data)  ← DB first (source of truth)
+//     Cache::tags(['trips'])->put("trip:{$id}", $trip, 3600)  ← update cache
+//     Cache::tags(['trips'])->forget('trips:active')  ← list is stale: invalidate
+//     return $trip
+//   ✅ Cache always fresh after write
+//   ❌ Write path slightly slower (extra cache write)
+//   ❌ May populate cache with data never read (wasted Redis memory)
+//
+// Write-behind (write-back): write cache first, DB asynchronously
+//   Only for non-critical data: view counts, analytics
+//   Redis::hincrby("trip:{$id}:stats", 'view_count', 1)  ← instant
+//   SyncViewCountsJob (every 5 min): flush Redis counts to MySQL
+//   ✅ Extremely fast writes (Redis only)
+//   ❌ Data loss if Redis crashes before DB sync
+//   Use ONLY for: counters, analytics, non-critical metrics — never financial data
+// ============================================================
+
+
+
+// ============================================================
+// Cache invalidation strategies
+//
+// Strategy 1: TTL-based (simplest)
+//   Cache::put('trip:42', $trip, 3600)
+//   ✅ Simple, zero invalidation code
+//   ❌ Stale for up to TTL — acceptable for trip listings
+//
+// Strategy 2: Tag-based invalidation
+//   Cache::tags(['trips', "trip:{$id}"])->put("trip:{$id}", $trip, 3600)
+//   On update: Cache::tags(["trip:{$id}"])->flush()
+//   On list change: Cache::tags(['trips'])->flush()
+//
+// Strategy 3: Event-driven invalidation
+//   Listener on TripUpdated event:
+//     Cache::tags(['trips'])->forget("trip:{$event->trip->id}")
+//     Cache::tags(['trips'])->forget('trips:active')
+//     Cloudflare::purgeCacheByTags(['trip-listing'])  ← CDN purge
+//   ✅ Cache always consistent with DB
+//   ❌ Listener must know all affected keys — more complex
+//
+// Strategy 4: Cache versioning (atomic, no race condition)
+//   Version key: "trip:{$id}:version" → incremented on update
+//   Cache key: "trip:{$id}:v{$version}"
+//   Invalidate: Cache::increment("trip:{$id}:version")
+//     ← old key orphaned (evicted by Redis LRU eventually)
+//   ✅ No delete + re-set race condition
+//   ❌ Orphaned keys accumulate → set maxmemory-policy: allkeys-lru
+// ============================================================
+
+
+
+// ============================================================
+// Cache monitoring — hit rates and performance
+//
+// Instrument cache operations:
+//   On cache hit  → metrics()->increment('cache.hit', ['prefix' => ...])
+//   On cache miss → metrics()->increment('cache.miss', ...)
+//   On rebuild    → metrics()->timing('cache.rebuild_ms', $duration)
+//
+// Redis INFO stats:
+//   keyspace_hits:   10000
+//   keyspace_misses: 500
+//   hit rate = 10000 / (10000 + 500) = 95.2%
+//
+// Alert thresholds:
+//   Hit rate < 80%       → investigate key naming or TTL too short
+//   Memory > 80% maxmem  → increase Redis instance or evict more
+//   Evicted keys > 0/min → cache too small, LRU removing useful data
+//   Connection errors    → Redis failover or pool exhaustion
+//
+// Laravel Horizon: queue + Redis monitoring dashboard
+// Datadog Redis integration: hit rate, latency, memory graphs out of the box
+//
+// Redis production config:
+//   maxmemory 2gb
+//   maxmemory-policy allkeys-lru  ← evict LRU when full
+//   save ""                       ← disable persistence for pure cache instance
+//   ← use separate Redis for session/queue (never FLUSHDB accidentally)
+// ============================================================
+
+
+
+// ============================================================
+// Distributed cache — multiple app servers
+//
+// config/cache.php: 'default' => 'redis'
+// config/database.php: separate Redis connections per concern:
+//   cache:   database 1
+//   session: database 2
+//   queue:   database 3
+//   ← prevents accidental FLUSHDB clearing wrong data
+//
+// Redis Cluster: high availability
+//   Multiple nodes with replication + Sentinel failover
+//   Data sharded by key slot across nodes
+//   WARNING: Cache::tags() requires all tag keys on same node
+//   Fix: use hash tags: {trips}:active → all {trips}:* keys on same node
+//     → Redis routes {trips}:* to same slot
+//
+// Session store with Redis:
+//   config/session.php: 'driver' => 'redis'
+//   All app servers share same Redis → no sticky sessions at load balancer
+//   ← stateless application tier; scale horizontally freely
+// ============================================================

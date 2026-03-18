@@ -1,0 +1,210 @@
+<?php
+
+// ============================================================
+// Problem 02 — SOLID Refactoring Exercise
+// ============================================================
+
+
+
+// ============================================================
+// Step 0 — Identify all 5 violations in BookingManager
+//
+// SRP violations (6 reasons to change in createBooking alone):
+//   1. validation logic (should be FormRequest)
+//   2. discount calculation (should be DiscountCalculator)
+//   3. database persistence (should be Repository)
+//   4. payment processing (should be PaymentGateway)
+//   5. email sending (should be Listener)
+//   6. SMS sending (should be Listener)
+//   + generatePdfReport() in booking service — export belongs elsewhere
+//   + sendSmsReminder() in booking service — notification belongs elsewhere
+//
+// OCP violation:
+//   refundBooking() has if/elseif per gateway
+//   adding MamoPay required editing BookingManager
+//   adding TapPayments requires editing BookingManager again
+//
+// LSP violation:
+//   refundBooking() has no consistent return type or contract
+//   gateway behaviour is unpredictable to callers
+//   (MamoPay branch silently does nothing if not Stripe)
+//
+// ISP violation:
+//   BookingManager bundles: creation + payment + PDF export + SMS
+//   callers that only need search are forced to depend on the full class
+//   (no interfaces defined at all — implicit fat interface)
+//
+// DIP violations:
+//   private \Stripe\StripeClient $stripe  ← concrete dependency
+//   __construct() creates: new \Stripe\StripeClient(...)  ← self-instantiation
+//   ← high-level module (BookingManager) depends on low-level detail (Stripe SDK)
+//   ← cannot test without real Stripe credentials
+// ============================================================
+
+
+
+// ============================================================
+// Step 1 — SRP: split BookingManager into focused classes
+//
+// StoreBookingRequest extends FormRequest
+//   rules(): array
+//     'school_name'   => 'required|string|max:255'
+//     'contact_email' => 'required|email'
+//     'contact_phone' => 'nullable|string'
+//     'student_count' => 'required|integer|min:1'
+//     'trip_date'     => 'required|date|after:today'
+//     'amount'        => 'required|numeric|min:0'
+//   ← ONE reason to change: validation rules change
+//
+// BookingRepository implements BookingRepositoryInterface
+//   create(array $data): Booking   → Booking::create($data)
+//   findOrFail(int $id): Booking   → Booking::findOrFail($id)
+//   update(int $id, array $data): Booking
+//     findOrFail → $booking->update($data) → return $booking
+//   ← ONE reason to change: persistence strategy changes
+//
+// DiscountCalculator
+//   apply(float $amount, int $studentCount): float
+//     > 100 → × 0.85
+//     > 50  → × 0.90
+//     else  → unchanged
+//   ← ONE reason to change: pricing rules change
+//
+// BookingService — business logic only
+//   __construct(BookingRepositoryInterface, PaymentGatewayInterface, DiscountCalculator)
+//   create(array $data): Booking
+//     apply discount via calculator
+//     set status = 'pending'
+//     repository->create($data)
+//     payment->charge($amount, 'GBP')
+//     event(new BookingCreated($booking))  ← delegates email + SMS
+//     return $booking
+//   refund(int $id): RefundResult
+//     repository->findOrFail($id)
+//     payment->refund($booking->payment_id)
+//     if succeeded → repository->update($id, ['status' => 'refunded'])
+//     return $result
+//
+// SendBookingConfirmation listener
+//   handle(BookingCreated $event): void
+//     Mail::to($event->booking->contact_email)->send(new BookingConfirmation(...))
+//
+// SendBookingSms listener
+//   handle(BookingCreated $event): void
+//     guard: if !$event->booking->contact_phone → return
+//     HTTP POST to SMS provider
+// ============================================================
+
+
+
+// ============================================================
+// Step 2 — OCP + DIP: payment gateway as interface
+//
+// app/Contracts/PaymentGatewayInterface.php
+//   charge(float $amount, string $currency): PaymentResult
+//   refund(string $chargeId, ?float $amount = null): RefundResult
+//   supportsRefunds(): bool
+//
+// StripeGateway implements PaymentGatewayInterface
+//   charge() → Stripe SDK paymentIntents->create()
+//     amount in pence: (int)($amount * 100)
+//     return new PaymentResult($intent->id, $intent->status)
+//   refund() → Stripe SDK refunds->create(['payment_intent' => $chargeId])
+//     return new RefundResult($refund->id, $refund->status)
+//   supportsRefunds(): bool → return true
+//
+// MamoPayGateway implements PaymentGatewayInterface
+//   charge() → Http::withToken()->post(MamoPay charges URL)
+//     return new PaymentResult($response['id'], $response['status'])
+//   refund() → return RefundResult::unsupported('MamoPay refunds must be processed manually')
+//     ← NO throw — honours contract (LSP fix combined here)
+//   supportsRefunds(): bool → return false
+//
+// Adding TapPaymentsGateway:
+//   create TapPaymentsGateway.php — BookingService never changes
+// ============================================================
+
+
+
+// ============================================================
+// Step 3 — ISP: define focused interfaces
+//
+// BookingCreatorInterface
+//   create(array $data): Booking
+//   refund(int $id): RefundResult
+//   ← BookingController depends on this — nothing else
+//
+// BookingSearchInterface
+//   search(array $filters): Collection
+//   findById(int $id): Booking
+//   ← read-only endpoints depend on this — no write methods
+//
+// BookingExportInterface
+//   exportToPdf(Collection $bookings): string
+//   exportToCsv(Collection $bookings): string
+//   ← BookingExportController depends on this only
+//
+// BookingService implements BookingCreatorInterface
+//   ← only responsible for creation + refund business logic
+//
+// BookingExporter implements BookingExportInterface
+//   exportToPdf() → PDF::loadView('reports.bookings')->output()
+//   exportToCsv() → CSV generation logic
+//   ← completely separate from booking creation
+// ============================================================
+
+
+
+// ============================================================
+// Step 4 — DIP: IoC bindings in AppServiceProvider
+//
+// app/Providers/AppServiceProvider.php
+//
+// register(): void
+//   bind BookingRepositoryInterface → EloquentBookingRepository::class
+//   bind BookingCreatorInterface    → BookingService::class
+//   bind BookingExportInterface     → BookingExporter::class
+//   bind PaymentGatewayInterface    → closure:
+//     match(config('payment.default'))
+//       'mamopay' → app(MamoPayGateway::class)
+//       default   → app(StripeGateway::class)
+//
+// ← ALL binding decisions in ONE place
+// ← Business logic has zero knowledge of which concrete class is used
+// ← Tests override bindings without touching production code:
+//     $this->app->bind(PaymentGatewayInterface::class, FakePaymentGateway::class)
+// ============================================================
+
+
+
+// ============================================================
+// Clean controller — all 5 principles applied
+//
+// BookingController
+//   __construct(BookingCreatorInterface $bookings)
+//     ← DIP: depends on abstraction
+//     ← ISP: depends only on creator interface
+//
+//   store(StoreBookingRequest $request): JsonResponse
+//     ← SRP: request owns validation
+//     $booking = $this->bookings->create($request->validated())
+//     return response()->json(new BookingResource($booking), 201)
+//
+//   refund(int $id): JsonResponse
+//     $result = $this->bookings->refund($id)
+//     ← OCP: gateway swapped without changing this
+//     ← LSP: result object always returned, no throws
+//     return response()->json(['success' => $result->succeeded, 'message' => $result->message])
+// ============================================================
+
+
+
+// ============================================================
+// Benefits summary
+//
+// SRP: One class changes for 6 reasons → each class changes for 1 reason
+// OCP: Adding gateway = edit PaymentService → adding gateway = new class only
+// LSP: MamoPayGateway throws on refund → all gateways honour full contract
+// ISP: One 12-method interface → 4 focused interfaces
+// DIP: Controller creates `new StripeGateway()` → injects PaymentGatewayInterface
+// ============================================================

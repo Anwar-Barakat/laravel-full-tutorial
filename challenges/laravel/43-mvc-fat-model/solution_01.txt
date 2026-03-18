@@ -1,0 +1,186 @@
+<?php
+
+// ============================================================
+// Problem 01 — Laravel MVC Architecture
+// ============================================================
+
+
+
+// ============================================================
+// MODEL LAYER — Eloquent + business rules
+//
+// Responsibility: data shape, relationships, simple business rules
+//
+// Booking extends Model
+//   use HasFactory, SoftDeletes
+//   protected $fillable = [school_id, trip_id, contact_name, contact_email,
+//     student_count, trip_date, amount, status, payment_id]
+//   protected $casts:
+//     trip_date   → 'date'
+//     amount      → 'decimal:2'
+//     status      → BookingStatus::class  (PHP 8.1 enum cast)
+//     created_at  → 'datetime'
+//
+//   Relationships:
+//     school(): BelongsTo  → belongsTo(School::class)
+//     trip(): BelongsTo    → belongsTo(Trip::class)
+//     payments(): HasMany  → hasMany(Payment::class)
+//
+//   Business rules (OK in model — only affect own data):
+//     isPaid(): bool → $this->status === BookingStatus::Paid
+//     isCancellable(): bool
+//       status is Pending or Confirmed
+//       AND trip_date is > 7 days from now
+//     totalPaid(): float
+//       $this->payments()->where('status', 'captured')->sum('amount')
+//     outstandingBalance(): float
+//       max(0, $this->amount - $this->totalPaid())
+//
+//   Scopes:
+//     scopePending()   → where('status', BookingStatus::Pending)
+//     scopeForSchool() → where('school_id', $schoolId)
+//     scopeUpcoming()  → where('trip_date', '>=', now())
+//
+//   Accessors:
+//     formattedAmount(): Attribute
+//       Attribute::get(fn() → '£' . number_format($this->amount, 2))
+// ============================================================
+
+
+
+// ============================================================
+// VIEW LAYER — API Resource (JSON response shape)
+//
+// Responsibility: shape HTTP response — hide internal model structure
+//
+// BookingResource extends JsonResource
+//   toArray(Request $request): array
+//     id, status (enum value), trip_date (date string), student_count, amount
+//     formatted_amount  → from accessor
+//     is_paid           → $this->isPaid()
+//     is_cancellable    → $this->isCancellable()
+//     school            → new SchoolResource($this->whenLoaded('school'))
+//     trip              → new TripResource($this->whenLoaded('trip'))
+//     links.self        → route('bookings.show', $this->id)
+//     links.cancel      → isCancellable ? route('bookings.cancel', ...) : null
+//
+// BookingCollection extends ResourceCollection
+//   toArray(): array
+//     data → $this->collection
+//     meta.total_bookings → $this->collection->count()
+//     meta.total_revenue  → $this->collection->sum('amount')
+//
+// Why resource not just $booking->toJson():
+//   Hides internal column names
+//   Adds computed fields (is_paid, links)
+//   Conditional relationships via whenLoaded (no N+1)
+//   Versioning: change resource without changing model
+// ============================================================
+
+
+
+// ============================================================
+// CONTROLLER LAYER — HTTP glue only (thin controller)
+//
+// Responsibility: receive HTTP input → delegate → return HTTP response
+//
+// BookingController
+//   __construct(BookingService $service, BookingRepository $repository)
+//
+//   index(Request $request): JsonResponse
+//     $this->repository->paginate(filters, perPage)
+//     return BookingResource::collection(...)->response()
+//
+//   store(StoreBookingRequest $request): JsonResponse
+//     $booking = $this->service->create($request->validated())
+//     return (new BookingResource($booking))->response()->setStatusCode(201)
+//
+//   show(Booking $booking): JsonResponse
+//     $booking->load(['school', 'trip', 'payments'])
+//     return new JsonResponse(new BookingResource($booking))
+//
+//   destroy(Booking $booking): JsonResponse
+//     $this->service->cancel($booking)
+//     return response()->json(['message' => 'Booking cancelled'])
+//
+// 3 lines per method max — no business logic here
+// ============================================================
+
+
+
+// ============================================================
+// Thin Controller vs Fat Controller
+//
+// ❌ Fat controller — 5 reasons to change (SRP violation):
+//   1. Validation inline (validation rules change)
+//   2. Discount calculation inline (pricing rules change)
+//   3. DB queries inline (storage changes)
+//   4. Email sending inline (email template changes)
+//   5. Formatting response inline (response shape changes)
+//
+// ✅ Thin controller — 1 reason to change:
+//   store():
+//     $booking = $this->service->create($request->validated())
+//     return response 201
+//   Controller only changes when: HTTP layer requirements change (status code, auth)
+// ============================================================
+
+
+
+// ============================================================
+// When to extract a Service layer
+//
+// Fat Model = OK:
+//   Simple boolean flags: isPaid(), isCancellable()
+//   Derived values: outstandingBalance(), formattedAmount()
+//   Scopes, relationships
+//   State transitions touching only own columns: markAsPaid()
+//
+// Model TOO fat — extract to Service when:
+//   Calls external APIs (Stripe, SendGrid)
+//   Coordinates multiple models (booking + payment + invoice)
+//   Fires events
+//   Requires injected dependencies (can't inject into model easily)
+//
+// ❌ Model doing too much:
+//   Booking::confirm() creates Stripe payment intent + sends email + updates status
+//   → model has 3 external dependencies, 3 reasons to change
+//
+// ✅ BookingService::confirm(Booking $booking):
+//   $payment = $this->gateway->charge($booking->amount, 'GBP')
+//   $booking->update(['status' => 'confirmed', 'payment_id' => $payment->id])
+//   event(new BookingConfirmed($booking))
+//   ← model stays: data + simple rules
+//   ← service adds: multi-system orchestration
+// ============================================================
+
+
+
+// ============================================================
+// Complete request lifecycle
+//
+// HTTP Request
+//   → Route (routes/api.php)
+//       Route::post('/bookings', [BookingController::class, 'store'])
+//   → Middleware stack (EnsureJsonResponse, ApiAuthentication, ThrottleRequests)
+//   → Form Request (StoreBookingRequest)
+//       authorize(): can user create bookings?
+//       rules(): validate input
+//       422 if invalid
+//   → Controller (BookingController::store)
+//       receives $request->validated()
+//       delegates to $this->service->create()
+//   → Service (BookingService::create)
+//       apply discount logic
+//       call repository to persist
+//       fire BookingCreated event
+//   → Repository (BookingRepository::create)
+//       Booking::create($data)
+//   → Model (Booking)
+//       fillable, casts, observers
+//   → Event Listeners (async/sync)
+//       SendEmail, LogActivity, UpdateStats, ClearCache
+//   → API Resource (BookingResource)
+//       shape JSON response
+//   → HTTP 201 JsonResponse
+// ============================================================

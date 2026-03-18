@@ -1,0 +1,188 @@
+<?php
+
+// ============================================================
+// Problem 02 — Advanced Patterns: Builder · Adapter · Chain
+// ============================================================
+
+
+
+// ============================================================
+// Builder Pattern — fluent API for complex query construction
+//
+// Problem: complex booking queries have many optional filters
+//   stacking where() calls inline is unreadable and untestable
+//
+// BookingQueryBuilder
+//   private Builder $query
+//   private int $perPage = 15
+//
+//   private __construct() → $this->query = Booking::query()
+//   static create(): static → new static()
+//
+//   forSchool(int $schoolId): static
+//     $this->query->where('school_id', $schoolId)
+//     return $this
+//
+//   withStatus(string|array $status): static
+//     $this->query->whereIn('status', (array) $status)
+//     return $this
+//
+//   dateRange(string $from, string $to): static
+//     $this->query->whereBetween('trip_date', [$from, $to])
+//     return $this
+//
+//   withPayments(): static
+//     $this->query->with('payments')
+//     return $this
+//
+//   withSchool(): static
+//     $this->query->with('school')
+//     return $this
+//
+//   minAmount(float $amount): static
+//     $this->query->where('amount', '>=', $amount)
+//     return $this
+//
+//   paginate(int $perPage): LengthAwarePaginator
+//     return $this->query->paginate($perPage)
+//
+//   get(): Collection
+//     return $this->query->get()
+//
+//   first(): ?Booking
+//     return $this->query->first()
+//
+// Usage:
+//   BookingQueryBuilder::create()
+//     ->forSchool(1)
+//     ->withStatus('paid')
+//     ->dateRange('2026-01-01', '2026-06-30')
+//     ->withPayments()
+//     ->paginate(15)
+//
+//   BookingQueryBuilder::create()
+//     ->withStatus(['pending', 'processing'])
+//     ->minAmount(1000)
+//     ->get()
+//
+// Key: each method returns $this → chainable; terminal methods return result
+// ============================================================
+
+
+
+// ============================================================
+// Adapter Pattern — MamoPay SDK → PaymentGatewayInterface
+//
+// Problem: MamoPay SDK has incompatible method names and signatures
+//   MamoPayClient::createCharge() vs your charge()
+//   MamoPayClient::voidCharge()   vs your refund()
+//   MamoPayClient::fetchCharge()  vs your getTransaction()
+//
+// PaymentGatewayInterface (your contract)
+//   charge(float $amount, string $currency): PaymentResult
+//   refund(string $transactionId, ?float $amount = null): RefundResult
+//   getTransaction(string $transactionId): TransactionResult
+//
+// MamoPayAdapter implements PaymentGatewayInterface
+//   __construct(private MamoPayClient $client)
+//
+//   charge():
+//     $response = $this->client->createCharge([...])  ← MamoPay method
+//     translate response → new PaymentResult(id, status, amount, currency)
+//     ← MamoPay uses decimal amounts (not pence), map field names
+//
+//   refund():
+//     $response = $this->client->voidCharge($transactionId)  ← "void" not "refund"
+//     translate → new RefundResult(id, succeeded, message)
+//     ← MamoPay calls refund a "void" — adapter hides this
+//
+//   getTransaction():
+//     $response = $this->client->fetchCharge($transactionId)  ← "fetchCharge"
+//     translate → new TransactionResult(id, status, amount, createdAt)
+//
+//   private mapStatus(string $mamoState): string
+//     'captured' → 'succeeded'
+//     'voided'   → 'refunded'
+//     'pending'  → 'pending'
+//     'failed'   → 'failed'
+//     default    → 'unknown'
+//
+// Wire:
+//   $this->app->bind(PaymentGatewayInterface::class, fn() =>
+//     new MamoPayAdapter(new MamoPayClient(config('services.mamopay.key')))
+//   )
+//
+// Usage: app(PaymentGatewayInterface::class)->charge(5000, 'AED')
+//   ← caller oblivious to MamoPay internals
+// ============================================================
+
+
+
+// ============================================================
+// Chain of Responsibility — booking processing pipeline
+//
+// Problem: booking must pass through validation → pricing → payment → notification
+//   if/else blocks or long service methods are hard to extend or reorder
+//
+// BookingHandlerInterface
+//   setNext(BookingHandlerInterface $handler): BookingHandlerInterface
+//   handle(Booking $booking): BookingResult
+//
+// AbstractBookingHandler implements BookingHandlerInterface
+//   private ?BookingHandlerInterface $next = null
+//   setNext($handler): BookingHandlerInterface
+//     $this->next = $handler
+//     return $handler  ← return handler for fluent chaining
+//   protected passToNext(Booking $booking): BookingResult
+//     if $this->next → return $this->next->handle($booking)
+//     else → return BookingResult::success($booking)  ← end of chain
+//
+// ValidateBookingHandler extends AbstractBookingHandler
+//   handle():
+//     if student_count < 1 → return BookingResult::failure('...')
+//     if trip_date is past  → return BookingResult::failure('...')
+//     return $this->passToNext($booking)
+//
+// CalculatePricingHandler extends AbstractBookingHandler
+//   __construct(BookingPricingService $pricer)
+//   handle():
+//     strategy = PricingStrategyFactory::forBooking($booking)
+//     $booking->amount = $pricer->setStrategy(strategy)->calculatePrice(...)['total']
+//     return $this->passToNext($booking)
+//
+// ProcessPaymentHandler extends AbstractBookingHandler
+//   __construct(PaymentGatewayInterface $gateway)
+//   handle():
+//     $payment = $this->gateway->charge($booking->amount, 'AED')
+//     if !$payment->succeeded() → return BookingResult::failure('Payment failed: ...')
+//     $booking->payment_id = $payment->id
+//     $booking->status     = 'paid'
+//     return $this->passToNext($booking)
+//
+// SendNotificationHandler extends AbstractBookingHandler
+//   handle():
+//     event(new BookingCreated($booking))
+//     return $this->passToNext($booking)
+//
+// BookingPipeline
+//   static process(Booking $booking, array $handlers): BookingResult
+//     if empty → return BookingResult::success($booking)
+//     wire chain: for i → $handlers[i]->setNext($handlers[i+1])
+//     return $handlers[0]->handle($booking)
+//
+// Usage:
+//   $result = BookingPipeline::process($booking, [
+//     app(ValidateBookingHandler::class),
+//     app(CalculatePricingHandler::class),
+//     app(ProcessPaymentHandler::class),
+//     app(SendNotificationHandler::class),
+//   ])
+//   if !$result->succeeded → return 422 response
+//
+// Laravel built-in alternative:
+//   Pipeline::send($booking)->through([...])->thenReturn()
+//   ← same pattern, framework-provided implementation
+//
+// Key: each handler decides whether to pass forward or stop the chain
+//   stopping early returns failure result — later handlers never run
+// ============================================================

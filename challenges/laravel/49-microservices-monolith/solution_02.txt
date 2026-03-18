@@ -1,0 +1,118 @@
+<?php
+
+// ============================================================
+// Problem 02 — Advanced Microservices vs Monolith
+// ============================================================
+
+
+
+// ============================================================
+// Microservices communication patterns
+//
+// Synchronous HTTP (REST) — request/response:
+//   PaymentGatewayHttpAdapter implements PaymentGatewayInterface
+//     __construct(Http $http)
+//     charge():
+//       Http::withToken(...)->timeout(10)->retry(3, 100, $retryOnNetworkError)
+//         ->post(config('services.payment.url') . '/charges', $payload)
+//       if $response->failed() → throw PaymentServiceException
+//       return new PaymentResult($response->json('id'), ...)
+//   ✅ Simple, familiar, curl-debuggable
+//   ❌ 10–50ms per HTTP call (vs 0.01ms in-process)
+//   ❌ Booking fails if Payment service is down
+//   ❌ Distributed transaction: payment succeeded + booking write failed?
+//
+// Asynchronous messaging (SQS/RabbitMQ) — fire and forget:
+//   BookingCreatedPublisher::publish(Booking)
+//     Queue::connection('sqs')->pushRaw(json_encode([event data]), 'booking-events')
+//   NotificationConsumer::handle(array $payload) → Mail::to(...)->send(...)
+//   ✅ BookingService doesn't wait for Notification
+//   ✅ Resilient: Notification down → message sits in queue, retried later
+//   ✅ Independent scaling per service
+//   ❌ Eventual consistency: email arrives after booking is visible
+//   ❌ Harder to debug: trace message across services
+// ============================================================
+
+
+
+// ============================================================
+// Data ownership and distributed transactions
+//
+// Microservices rule: each service owns its own database
+//   Booking DB:  bookings, booking_items
+//   Payment DB:  payments, refunds, transactions
+//   School DB:   schools, users, contacts
+//   ← NO cross-service JOINs — query via API only
+//
+// Problem: create booking (Booking DB) + charge payment (Payment DB)
+//   Must both succeed or both fail → distributed transaction needed
+//
+// Saga pattern (compensating transactions):
+//   BookingCreationSaga::execute(array $data): Booking
+//   private array $compensations = []
+//
+//   Step 1: $booking = $this->bookingService->reserve($data)
+//     $compensations[] = fn() → $this->bookingService->cancel($booking->id)
+//
+//   Step 2: $payment = $this->paymentService->charge($booking->amount, 'AED')
+//     $compensations[] = fn() → $this->paymentService->refund($payment->id)
+//
+//   Step 3: $this->bookingService->confirm($booking->id, $payment->id)
+//     return $booking
+//
+//   On any exception:
+//     foreach array_reverse($this->compensations) as $compensate:
+//       try $compensate()
+//       catch → Log::critical('Saga compensation failed') → manual intervention
+//
+//   ✅ No distributed lock; each step atomic in its own service
+//   ❌ Compensation logic for every step
+//   ❌ Temporary inconsistency: booking exists before payment confirmed
+// ============================================================
+
+
+
+// ============================================================
+// Boundary enforcement — tools
+//
+// Option 1: Deptrac (static analysis)
+//   deptrac.yaml: define layers (Booking, Payment) and ruleset
+//   ruleset: Booking may import from Payment (interfaces only)
+//            Payment has no dependencies on Booking
+//   php vendor/bin/deptrac analyze  ← fails CI if violation found
+//
+// Option 2: Namespace conventions
+//   app/Modules/Payment/Contracts/  → public API (importable by other modules)
+//   app/Modules/Payment/Internal/   → private impl (never import from outside)
+//
+// Option 3: Separate composer packages
+//   Each module = separate composer package
+//   Only exposes what's in public API via exports
+//   ← strongest isolation, overkill for most teams
+//   ← microservices are simpler than package isolation
+// ============================================================
+
+
+
+// ============================================================
+// Observability in distributed systems
+//
+// Distributed tracing — follow request across services:
+//   CorrelationIdMiddleware:
+//     $correlationId = $request->header('X-Correlation-ID', Str::uuid())
+//     $request->headers->set('X-Correlation-ID', $correlationId)
+//     Http::withHeaders(['X-Correlation-ID' => $correlationId])  ← pass to outgoing calls
+//     Log::withContext(['correlation_id' => $correlationId])     ← all log entries
+//     $response->headers->set('X-Correlation-ID', $correlationId)
+//
+// Structured logs across all services:
+//   BookingService: {"correlation_id":"abc-123","event":"booking.created","booking_id":42}
+//   PaymentService: {"correlation_id":"abc-123","event":"payment.charged","booking_id":42}
+//   ← search Datadog/ELK by correlation_id: full request flow in one view
+//
+// Health check per service: GET /health
+//   return { status, service, version, db: ok/error, redis: ok/error,
+//            dependencies: { payment-service: ok/error } }
+//   ← ECS / Kubernetes health check hits this every 30s
+//   ← unhealthy instance removed from load balancer automatically
+// ============================================================

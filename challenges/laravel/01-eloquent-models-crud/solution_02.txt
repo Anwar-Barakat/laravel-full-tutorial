@@ -1,0 +1,164 @@
+<?php
+
+// ============================================================
+// Problem 02 — Eloquent CRUD Controller
+// ============================================================
+
+// app/Http/Resources/BookingResource.php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class BookingResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'            => $this->id,
+            'school_name'   => $this->school_name,
+            'destination'   => $this->destination,
+            'student_count' => $this->student_count,
+            'trip_date'     => $this->trip_date?->format('Y-m-d'),
+            'status'        => $this->status,
+            'amount'        => $this->amount,
+        ];
+    }
+}
+
+
+// ============================================================
+// app/Http/Requests/StoreBookingRequest.php
+// ============================================================
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class StoreBookingRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'school_name'   => ['required', 'min:3', 'max:255'],
+            'destination'   => ['required', 'min:3', 'max:255'],
+            'student_count' => ['required', 'numeric', 'max:200'],
+            'trip_date'     => ['required', 'date', 'after:today'],
+            'status'        => ['required', 'in:pending,paid'],
+            'amount'        => ['required', 'min:0', 'numeric'],
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'trip_date.after'   => 'Trip date must be in the future.',
+            'student_count.max' => 'Maximum 200 students per booking.',
+        ];
+    }
+}
+
+
+// ============================================================
+// app/Http/Requests/UpdateBookingRequest.php
+// ============================================================
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class UpdateBookingRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'school_name'   => ['nullable', 'min:3', 'max:255'],
+            'destination'   => ['nullable', 'min:3', 'max:255'],
+            'student_count' => ['nullable', 'numeric'],
+            'trip_date'     => ['nullable', 'date_format:Y-m-d'],
+            'status'        => ['nullable', 'in:pending,paid'],
+            'amount'        => ['nullable', 'min:0', 'numeric'],
+        ];
+    }
+}
+
+
+// ============================================================
+// app/Http/Controllers/BookingController.php
+// ============================================================
+
+namespace App\Http\Controllers;
+
+use App\Models\Booking;
+use App\Http\Requests\StoreBookingRequest;
+use App\Http\Requests\UpdateBookingRequest;
+use App\Http\Resources\BookingResource;
+use Illuminate\Http\Request;
+
+class BookingController extends Controller
+{
+    public function index(Request $request)
+    {
+        $bookings = Booking::select([
+            'id', 'school_name', 'destination',
+            'student_count', 'amount', 'trip_date', 'status',
+        ])->when($request->search, fn($query, $search) =>
+            $query->where('school_name', 'LIKE', '%'.$search.'%')
+                  ->orWhere('destination', 'LIKE', '%'.$search.'%')
+        )->when($request->status, fn($query, $status) =>
+            $query->where('status', $status)
+        )->when($request->sort_by, fn($query, $sort_by) =>
+            $query->orderBy($sort_by, $request->input('sort_dir', 'asc'))
+        )->paginate($request->input('per_page', 15));
+
+        return BookingResource::collection($bookings);
+    }
+
+    public function show(Booking $booking)
+    {
+        return BookingResource::make($booking);
+    }
+
+    public function store(StoreBookingRequest $request)
+    {
+        $booking = Booking::create($request->validated());
+
+        return BookingResource::make($booking)
+            ->response()
+            ->setStatusCode(201);
+    }
+
+    public function update(UpdateBookingRequest $request, Booking $booking)
+    {
+        $booking->update($request->validated());
+
+        return BookingResource::make($booking);
+    }
+
+    public function destroy(Booking $booking)
+    {
+        $booking->delete();
+
+        return response()->noContent();
+    }
+}
+
+
+// ============================================================
+// routes/api.php
+// ============================================================
+
+use App\Http\Controllers\BookingController;
+
+Route::apiResource('bookings', BookingController::class);

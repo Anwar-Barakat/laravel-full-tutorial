@@ -1,0 +1,224 @@
+<?php
+
+// ============================================================
+// Problem 01 — SOLID with Laravel Examples
+// ============================================================
+
+
+
+// ============================================================
+// S — Single Responsibility Principle
+//
+// A class should have ONE reason to change
+//
+// Fat controller violates SRP — 6 reasons to change:
+//   1. validation rules change
+//   2. discount calculation changes
+//   3. storage strategy changes
+//   4. payment provider changes
+//   5. email template changes
+//   6. log format changes
+//
+// Fix: split into focused classes
+//
+// StoreBookingRequest  → owns validation rules only
+//   extends FormRequest
+//   rules(): array — return validation array
+//
+// BookingRepository → owns data persistence only
+//   create(array $data): Booking  → Booking::create($data)
+//   findOrFail(int $id): Booking  → Booking::findOrFail($id)
+//
+// BookingService → owns business logic only
+//   __construct(BookingRepository $repository)
+//   create(array $data): Booking
+//     applyGroupDiscount() → calculate amount
+//     set $data['status'] = 'pending'
+//     $this->repository->create($data)
+//     event(new BookingCreated($booking)) ← delegates email/payment to listeners
+//     return $booking
+//   private applyGroupDiscount(float $amount, int $count): float
+//     > 100 students → × 0.85
+//     > 50  students → × 0.90
+//     else → unchanged
+//
+// BookingController → owns HTTP layer only
+//   __construct(BookingService $service)
+//   store(StoreBookingRequest $request): JsonResponse
+//     $this->service->create($request->validated())
+//     return response()->json(new BookingResource($booking), 201)
+//
+// Each class now has exactly ONE reason to change
+// ============================================================
+
+
+
+// ============================================================
+// O — Open/Closed Principle
+//
+// Open for extension, closed for modification
+// Add new gateway = add new class, change nothing existing
+//
+// BEFORE: PaymentService::charge() with if/elseif per gateway
+//   Adding MamoPay, Tap, PayPal = editing charge() every time
+//
+// AFTER: PaymentGatewayInterface contract
+//   interface PaymentGatewayInterface
+//     charge(float $amount, string $currency): PaymentResult
+//     refund(string $chargeId, ?float $amount = null): RefundResult
+//
+// StripeGateway implements PaymentGatewayInterface
+//   charge() → create paymentIntent via Stripe SDK
+//     amount in pence: (int)($amount * 100)
+//     return new PaymentResult($intent->id, $intent->status)
+//   refund() → create refund via Stripe SDK
+//     params: ['payment_intent' => $chargeId]
+//     optional amount → add 'amount' key in pence
+//     return new RefundResult($refund->id, $refund->status)
+//
+// MamoPayGateway implements PaymentGatewayInterface
+//   charge() → Http::withToken()->post() to MamoPay charges endpoint
+//     return new PaymentResult($response['id'], $response['status'])
+//   refund() → Http::withToken()->post() to charges/{id}/refund endpoint
+//     return new RefundResult(...)
+//
+// PaymentServiceProvider
+//   register(): bind PaymentGatewayInterface to concrete class
+//     match(config('payment.default'))
+//       'mamopay' → new MamoPayGateway()
+//       default   → new StripeGateway()
+//
+// Adding TapPaymentsGateway:
+//   1. Create TapPaymentsGateway.php implementing interface
+//   2. Add 'tap' case to match in provider
+//   ← BookingService, PaymentService, etc. — zero changes
+// ============================================================
+
+
+
+// ============================================================
+// L — Liskov Substitution Principle
+//
+// Subtypes must be substitutable for their base type
+// Swap StripeGateway for MamoPayGateway — program still works
+//
+// BEFORE violation:
+//   MamoPayGateway::refund() throws RuntimeException
+//   Caller must know which gateway it has → defeats the interface
+//
+// AFTER: make capability explicit in the contract
+//
+// PaymentGatewayInterface adds:
+//   supportsRefunds(): bool   ← advertise capability
+//
+// StripeGateway
+//   supportsRefunds(): bool → return true
+//   refund() → full implementation, returns RefundResult
+//
+// MamoPayGateway
+//   supportsRefunds(): bool → return false
+//   refund() → return RefundResult::unsupported('MamoPay refunds must be processed manually')
+//     ← returns result object, NEVER throws
+//     ← caller handles gracefully without knowing which gateway
+//
+// RefundService works with ANY gateway:
+//   __construct(PaymentGatewayInterface $gateway)
+//   refund(Booking $booking): RefundResult
+//     $result = $this->gateway->refund($booking->payment_id)
+//     if (!$result->succeeded) → Log::warning(...)   ← no instanceof check
+//     return $result
+//   ← identical behaviour with Stripe or MamoPay injected
+//
+// Key rule: honour the contract — return the declared type, do not throw
+//   where the interface does not declare a throw
+// ============================================================
+
+
+
+// ============================================================
+// I — Interface Segregation Principle
+//
+// Clients should not depend on interfaces they don't use
+// Prefer many small focused interfaces over one fat interface
+//
+// BEFORE: BookingServiceInterface with 12 methods
+//   ReadOnlyBookingService forced to throw BadMethodCallException
+//   for create/update/cancel/export/sms it doesn't support
+//
+// AFTER: 4 segregated interfaces
+//
+// BookingCreatorInterface
+//   create(array $data): Booking
+//   update(int $id, array $data): Booking
+//   cancel(int $id): void
+//
+// BookingSearchInterface
+//   search(array $filters): Collection
+//   findById(int $id): Booking
+//
+// BookingExportInterface
+//   exportToCsv(Collection $bookings): string
+//   exportToPdf(Collection $bookings): string
+//
+// BookingNotificationInterface
+//   sendConfirmationEmail(Booking $booking): void
+//   sendReminderSms(Booking $booking): void
+//
+// Full service implements only relevant interfaces:
+//   class BookingService implements BookingCreatorInterface, BookingSearchInterface
+//
+// Read-only / cached service implements minimum:
+//   class CachedBookingReadService implements BookingSearchInterface
+//   ← no stubs, no throws — only real methods
+//
+// Controllers inject only what they use:
+//   BookingController     → BookingCreatorInterface
+//   BookingExportController → BookingExportInterface
+//   ← no awareness of methods they don't call
+// ============================================================
+
+
+
+// ============================================================
+// D — Dependency Inversion Principle
+//
+// High-level modules depend on abstractions, not concretions
+// Abstractions should not depend on details
+//
+// BEFORE violation:
+//   BookingController creates: new BookingService(new BookingRepository(), new StripeGateway(), ...)
+//   ← concrete instantiation hardcoded — can't swap without editing controller
+//
+// AFTER: define abstractions (contracts), wire in provider
+//
+// app/Contracts/BookingRepositoryInterface.php
+//   create(array $data): Booking
+//   findOrFail(int $id): Booking
+//
+// app/Contracts/PaymentGatewayInterface.php
+//   charge(float $amount, string $currency): PaymentResult
+//
+// Concrete classes implement abstractions (details depend on abstractions):
+//   EloquentBookingRepository implements BookingRepositoryInterface
+//   StripeGateway implements PaymentGatewayInterface
+//
+// BookingService depends on abstractions only:
+//   __construct(
+//     BookingRepositoryInterface $repository,
+//     PaymentGatewayInterface $payment,
+//   )
+//   ← StripeGateway, MamoPayGateway, or MockGateway in tests — all work
+//
+// BookingController depends on abstraction:
+//   __construct(BookingCreatorInterface $bookings)
+//   ← not BookingService concrete class
+//
+// AppServiceProvider::register() — bindings in ONE place:
+//   $this->app->bind(BookingRepositoryInterface::class, EloquentBookingRepository::class)
+//   $this->app->bind(PaymentGatewayInterface::class,    StripeGateway::class)
+//   $this->app->bind(BookingCreatorInterface::class,    BookingService::class)
+//
+// Test swapping (no production code changes):
+//   $this->app->bind(PaymentGatewayInterface::class,   FakePaymentGateway::class)
+//   $this->app->bind(BookingRepositoryInterface::class, InMemoryBookingRepository::class)
+// ============================================================

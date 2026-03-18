@@ -1,0 +1,171 @@
+<?php
+
+// ============================================================
+// Problem 01 — Clean Architecture
+// ============================================================
+
+
+
+// ============================================================
+// The Dependency Rule
+//
+// 4 concentric layers, dependencies point INWARD ONLY:
+//
+//   Domain (innermost — pure PHP, zero framework imports)
+//     ← Entities, Value Objects, Domain Interfaces
+//
+//   Application (use cases)
+//     ← BookingService, CreateBookingUseCase
+//     ← depends on Domain interfaces (never on infrastructure)
+//
+//   Interface Adapters
+//     ← Controllers, Repositories, Gateways, Presenters
+//     ← translates between framework and application
+//
+//   Infrastructure (outermost)
+//     ← Eloquent, MySQL, Redis, HTTP clients, SQS, S3
+//     ← implements Domain interfaces
+//
+// NEVER: Domain imports from Laravel or Infrastructure
+// NEVER: Application imports Eloquent models directly
+// ============================================================
+
+
+
+// ============================================================
+// Domain Layer — pure PHP, zero framework
+//
+// Booking entity (no Eloquent, no Laravel)
+//   private fields: BookingId, SchoolId, TripId, Money, StudentCount, TripDate, BookingStatus
+//   private array $domainEvents = []
+//
+//   __construct(): set all fields, status = Pending
+//     $this->domainEvents[] = new BookingCreated($this)
+//
+//   confirm(PaymentResult $payment): void
+//     guard: status !== Pending → throw InvalidBookingStateException
+//     status = Confirmed
+//     $this->domainEvents[] = new BookingConfirmed($this, $payment)
+//
+//   cancel(string $reason): void
+//     guard: !isCancellable() → throw InvalidBookingStateException
+//     status = Cancelled
+//     $this->domainEvents[] = new BookingCancelled($this, $reason)
+//
+//   isCancellable(): bool
+//     status in [Pending, Confirmed] AND tripDate > now() + 7 days
+//
+//   releaseEvents(): array
+//     capture $events = $this->domainEvents
+//     $this->domainEvents = []
+//     return $events
+//     ← called after persistence to dispatch events
+//
+// Money value object (immutable, equality by value)
+//   __construct(int $amount, string $currency)
+//     ← stored in pence/fils — avoid float rounding errors
+//   add(Money $other): self — assertSameCurrency first
+//   multiply(float $factor): self
+//   equals(Money $other): bool — amount AND currency match
+//   toDecimal(): float — amount / 100
+//   formatted(): string — '£500.00' or 'AED 500.00' by currency
+//
+// Interfaces defined in Domain (infrastructure implements them):
+//   BookingRepositoryInterface: findById, findBySchool, save, nextId
+//   PaymentGatewayInterface: charge, refund
+// ============================================================
+
+
+
+// ============================================================
+// Application Layer — use cases, orchestration
+//
+// CreateBookingUseCase
+//   __construct(BookingRepositoryInterface, TripRepositoryInterface,
+//               PaymentGatewayInterface, EventDispatcherInterface)
+//   ← all injected dependencies are interfaces — never concrete classes
+//
+//   execute(CreateBookingCommand $command): BookingId
+//     1. load trip entity → check capacity (throws InsufficientCapacityException)
+//     2. new Booking(id, schoolId, tripId, amount, studentCount, tripDate)
+//     3. $payment = $this->payment->charge($booking->amount(), 'AED')
+//     4. $booking->confirm($payment)  ← domain state transition
+//     5. $trip->reserveCapacity($command->studentCount)
+//     6. $this->bookings->save($booking)  ← persist
+//     7. $this->trips->save($trip)
+//     8. foreach $booking->releaseEvents() → $this->dispatcher->dispatch($event)
+//     return $booking->id()
+//
+// CreateBookingCommand (input DTO)
+//   readonly fields: SchoolId, TripId, StudentCount, TripDate, contactEmail
+//   ← plain data object, no behaviour
+// ============================================================
+
+
+
+// ============================================================
+// Infrastructure Layer — Laravel implementations
+//
+// EloquentBookingRepository implements BookingRepositoryInterface
+//   findById(BookingId $id): ?Booking
+//     BookingModel::find($id->value()) → toDomain($model)
+//
+//   save(Booking $booking): void
+//     BookingModel::updateOrCreate(['id' => $booking->id()->value()], $this->toArray($booking))
+//
+//   nextId(): BookingId → BookingId::generate()
+//
+//   private toDomain(BookingModel $model): Booking
+//     Booking::reconstitute(...)  ← factory method that bypasses constructor invariants
+//     maps model columns to value objects (id, schoolId, Money, etc.)
+//
+//   private toArray(Booking $booking): array
+//     maps value objects back to raw DB column values
+//     ← bidirectional translation, domain entity unaware of Eloquent
+//
+// StripeGateway implements PaymentGatewayInterface
+//   __construct() creates \Stripe\StripeClient from config
+//   charge(Money $amount, string $currency): PaymentResult
+//     $this->client->paymentIntents->create(['amount' => $amount->toInt(), ...])
+//     return new PaymentResult(new PaymentId($intent->id), ...)
+//   refund(PaymentId $id, ?Money $amount = null): RefundResult
+//     $this->client->refunds->create([...])
+//     return new RefundResult(...)
+// ============================================================
+
+
+
+// ============================================================
+// Interface Adapters — translate HTTP ↔ use cases
+//
+// BookingController
+//   __construct(CreateBookingUseCase, GetBookingUseCase)
+//
+//   store(StoreBookingRequest $request): JsonResponse
+//     translate HTTP input → CreateBookingCommand (value objects)
+//     try $bookingId = $this->createBooking->execute($command)
+//     catch InsufficientCapacityException → 422
+//     catch PaymentFailedException → 402
+//     return response 201 with booking_id
+//
+//   ← controller knows HTTP codes and request format
+//   ← controller does NOT know domain or infrastructure details
+// ============================================================
+
+
+
+// ============================================================
+// Wiring — AppServiceProvider binds interfaces to implementations
+//
+// register(): void
+//   bind BookingRepositoryInterface → EloquentBookingRepository
+//   bind TripRepositoryInterface    → EloquentTripRepository
+//   bind PaymentGatewayInterface    → StripeGateway
+//   bind EventDispatcherInterface   → LaravelEventDispatcher
+//   bind CreateBookingUseCase (auto-resolved by IoC)
+//
+// Test swapping — no production code changes:
+//   $this->app->bind(PaymentGatewayInterface::class, FakePaymentGateway::class)
+//   $this->app->bind(BookingRepositoryInterface::class, InMemoryBookingRepository::class)
+//   ← domain + application 100% testable without DB or Stripe
+// ============================================================

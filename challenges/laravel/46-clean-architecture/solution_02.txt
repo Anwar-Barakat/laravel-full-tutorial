@@ -1,0 +1,169 @@
+<?php
+
+// ============================================================
+// Problem 02 — Advanced Clean Architecture
+// ============================================================
+
+
+
+// ============================================================
+// Domain events vs Application events
+//
+// Domain events: something happened in the domain
+//   Raised BY the entity itself
+//   Dispatched AFTER persistence (not during transaction)
+//   Immutable value objects with past-tense names
+//   Example: BookingConfirmed, BookingCancelled
+//
+// Application events: raised in application/service layer
+//   Describe technical fact ("booking email queued")
+//   Can carry infrastructure details (job IDs, gateway responses)
+//
+// LaravelEventDispatcher implements EventDispatcherInterface
+//   dispatch(object $event): void → event($event)
+//   ← domain calls interface, infrastructure calls Laravel
+//   ← domain stays clean, knows nothing about Laravel event system
+//
+// Release pattern in use case:
+//   $booking->save() first → then releaseEvents()
+//   ← ensures events only dispatched if persistence succeeded
+//   ← if save() throws, events are never dispatched (no orphaned emails)
+// ============================================================
+
+
+
+// ============================================================
+// CQRS — Command Query Responsibility Segregation
+//
+// Command (write) side — goes through full domain
+//   CreateBookingCommand → CreateBookingUseCase
+//     → domain entity (validation, state transitions, events)
+//     → EloquentBookingRepository (write to primary DB)
+//   Full domain richness: value objects, invariants, events
+//
+// Query (read) side — bypasses domain, goes direct to DB
+//   GetBookingQuery → BookingReadRepository
+//     → DB::table() JOIN query → flat BookingDto
+//   No domain entities, no value objects, no ORM overhead
+//
+// GetBookingUseCase
+//   __construct(BookingReadRepository $readRepo)
+//   execute(BookingId $id): BookingDto
+//     return $this->readRepo->findWithDetails($id)
+//
+// BookingReadRepository
+//   findWithDetails(BookingId $id): BookingDto
+//     DB::table('bookings')
+//       ->join('schools', ...)
+//       ->join('trips', ...)
+//       ->select('bookings.*', 'schools.name as school_name', ...)
+//       ->where('bookings.id', $id->value())
+//       ->first()
+//     → new BookingDto($row)  ← plain object, safe to JSON-encode
+//
+// BookingDto: flat plain object
+//   public int $id, string $status, string $schoolName, string $tripTitle, float $amount
+//   ← no domain behaviour, no value objects
+//
+// Benefits:
+//   Write path: full validation and event sourcing
+//   Read path:  optimized single JOIN, no collection building
+//   Scale:      read replica for queries, write only to primary
+// ============================================================
+
+
+
+// ============================================================
+// Hexagonal Architecture (Ports & Adapters) — same concept
+//
+// Port   = interface defined in application or domain
+// Adapter = implementation in infrastructure
+//
+// Primary ports (driving — caller initiates):
+//   HTTP request → BookingController (HTTP adapter) → CreateBookingUseCase
+//   CLI command  → BookingArtisanCommand (CLI adapter) → CreateBookingUseCase
+//   Test         → TestDouble (test adapter) → CreateBookingUseCase
+//
+// Secondary ports (driven — use case initiates):
+//   BookingRepositoryInterface (port) ← EloquentBookingRepository (adapter)
+//   PaymentGatewayInterface (port)    ← StripeGateway (adapter)
+//   EventDispatcherInterface (port)   ← LaravelEventDispatcher (adapter)
+//
+// Swap any adapter without touching the hexagon (core):
+//   Swap MySQL → DynamoDB: write new DynamoBookingRepository
+//   Swap Stripe → MamoPay: write new MamoPayGateway
+//   Add GraphQL: write GraphQL adapter calling same use cases
+//   ← core domain + use cases never change
+// ============================================================
+
+
+
+// ============================================================
+// When to use Clean Architecture — and when not to
+//
+// ✅ USE when:
+//   Complex domain with many business rules
+//   Large team: domain + infra teams work independently
+//   Long-lived codebase (architecture pays off over 2+ years)
+//   Multiple delivery mechanisms: REST + CLI + background jobs
+//   Need extensive unit testing without DB/HTTP
+//
+// ❌ DO NOT USE when:
+//   CRUD-only app with no business logic (admin panels, simple forms)
+//   Small team / prototype (overhead not justified)
+//   Deadline-driven MVP (add incrementally)
+//   Simple Laravel projects (standard MVC + service layer is fine)
+//
+// Pragmatic middle ground for Tripz:
+//   Use Value Objects for Money (avoid float bugs)
+//   Use Entities for Booking (state transitions + events)
+//   Keep repositories behind interfaces (testability)
+//   Skip full CQRS — use Eloquent directly for reads initially
+//   Add layers incrementally as domain complexity grows
+//
+// Migration path:
+//   Phase 1: Standard Laravel MVC (< 10k LOC — works fine)
+//   Phase 2: Service layer + Repository interfaces
+//   Phase 3: Value Objects + Domain Events
+//   Phase 4: Full Clean Architecture when team/domain warrants it
+// ============================================================
+
+
+
+// ============================================================
+// Testing clean architecture
+//
+// Domain layer — pure unit tests, zero Laravel/DB:
+//   test booking confirms when pending:
+//     new Booking(...)
+//     $booking->confirm(new PaymentResult(...))
+//     assert status === Confirmed
+//     assert releaseEvents() has 2 events (BookingCreated + BookingConfirmed)
+//
+//   test booking throws on confirming cancelled:
+//     cancel booking first
+//     confirm → expectException(InvalidBookingStateException)
+//
+//   ← runs in microseconds, no test database needed
+//
+// Application layer — test use case with in-memory adapters:
+//   InMemoryBookingRepository implements BookingRepositoryInterface
+//     stores in array, never touches DB
+//   FakePaymentGateway implements PaymentGatewayInterface
+//     returns PaymentResult::success() without calling Stripe
+//   CollectingEventDispatcher implements EventDispatcherInterface
+//     stores dispatched events in array for assertions
+//
+//   test creates booking and dispatches events:
+//     useCase = new CreateBookingUseCase(in-memory adapters)
+//     $id = useCase->execute($command)
+//     assert $bookings->findById($id) !== null
+//     assert $dispatcher->dispatched(BookingConfirmed::class) has 1 event
+//     ← no database, no HTTP, runs in milliseconds
+//
+// Integration/Feature test — full stack through HTTP:
+//   use RefreshDatabase
+//   actingAs(user)->postJson('/api/bookings', validPayload())
+//   ->assertCreated()->assertJsonStructure(['booking_id'])
+//   ← real DB, real routes, tests full integration
+// ============================================================
