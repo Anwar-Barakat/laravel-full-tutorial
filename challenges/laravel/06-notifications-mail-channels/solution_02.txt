@@ -6,35 +6,277 @@
 
 
 // ============================================================
+// app/Notifications/Messages/WhatsAppMessage.php
+// ============================================================
+
+namespace App\Notifications\Messages;
+
+class WhatsAppMessage
+{
+    public function __construct(public readonly string $content) {}
+
+    public static function create(string $content): static
+    {
+        return new static($content);
+    }
+}
+
+
+// ============================================================
 // app/Channels/WhatsAppChannel.php
 // ============================================================
 
+namespace App\Channels;
+
+use App\Notifications\Messages\WhatsAppMessage;
+use Illuminate\Notifications\Notification;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\RateLimiter;
+
+class WhatsAppChannel
+{
+    public function send(mixed $notifiable, Notification $notification): void
+    {
+        if (! method_exists($notification, 'toWhatsApp')) return;
+
+        $phone = $notifiable->routeNotificationFor('whatsapp');
+        if (! $phone) return;
+
+        $key = "whatsapp:{$notifiable->getKey()}:{$notification->id}";
+
+        $sent = RateLimiter::attempt($key, 1, function () use ($phone, $notifiable, $notification) {
+            /** @var WhatsAppMessage $message */
+            $message = $notification->toWhatsApp($notifiable);
+
+            Http::post('https://api.whatsapp.com/send', [
+                'phone'   => $phone,
+                'message' => $message->content,
+            ]);
+        }, 3600);
+
+        if (! $sent) {
+            Log::warning('WhatsApp rate limit hit', ['phone' => $phone]);
+        }
+    }
+}
 
 
 // ============================================================
-// app/Channels/WhatsAppMessage.php  (value object)
+// app/Notifications/BookingConfirmedNotification.php  (updated)
 // ============================================================
 
+namespace App\Notifications;
+
+use App\Channels\WhatsAppChannel;
+use App\Models\Booking;
+use App\Notifications\Messages\WhatsAppMessage;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Notifications\Messages\MailMessage;
+use Illuminate\Notifications\Notification;
+
+class BookingConfirmedNotification extends Notification implements ShouldQueue
+{
+    use Queueable;
+
+    public function __construct(public readonly Booking $booking) {}
+
+    public function via(object $notifiable): array
+    {
+        $channels = ['mail', 'database'];
+
+        if ($notifiable->phone) {
+            $channels[] = 'vonage';
+            $channels[] = WhatsAppChannel::class;
+        }
+
+        return $channels;
+    }
+
+    public function toMail(object $notifiable): MailMessage
+    {
+        return (new MailMessage)
+            ->subject('Booking Confirmed')
+            ->markdown('mail.booking-confirmed', ['booking' => $this->booking]);
+    }
+
+    public function toArray(object $notifiable): array
+    {
+        return [
+            'booking_id'       => $this->booking->id,
+            'destination_name' => $this->booking->destination?->name,
+            'trip_date'        => $this->booking->trip_date,
+        ];
+    }
+
+    public function toWhatsApp(object $notifiable): WhatsAppMessage
+    {
+        return WhatsAppMessage::create(
+            "Booking confirmed! Trip to {$this->booking->destination?->name} on {$this->booking->trip_date->format('d M Y')}."
+        );
+    }
+}
 
 
 // ============================================================
-// app/Notifications/BookingConfirmedNotification.php  (updated via())
+// app/Models/User.php  (add WhatsApp routing)
 // ============================================================
 
+namespace App\Models;
+
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Notifications\Notifiable;
+
+class User extends Authenticatable
+{
+    use Notifiable;
+
+    public function routeNotificationForWhatsApp(): string
+    {
+        return $this->phone;
+    }
+}
 
 
 // ============================================================
 // app/Listeners/TrackNotificationSent.php
 // ============================================================
 
+namespace App\Listeners;
+
+use Illuminate\Notifications\Events\NotificationSent;
+use Illuminate\Support\Facades\Log;
+
+class TrackNotificationSent
+{
+    public function handle(NotificationSent $event): void
+    {
+        Log::info('Notification sent', [
+            'channel'      => $event->channel,
+            'notifiable'   => get_class($event->notifiable),
+            'notification' => get_class($event->notification),
+        ]);
+    }
+}
 
 
 // ============================================================
-// app/Providers/EventServiceProvider.php  (register listener)
+// app/Providers/EventServiceProvider.php
 // ============================================================
 
+namespace App\Providers;
+
+use App\Listeners\TrackNotificationSent;
+use Illuminate\Foundation\Support\Providers\EventServiceProvider as ServiceProvider;
+use Illuminate\Notifications\Events\NotificationSent;
+
+class EventServiceProvider extends ServiceProvider
+{
+    protected $listen = [
+        NotificationSent::class => [
+            TrackNotificationSent::class,
+        ],
+    ];
+}
 
 
 // ============================================================
-// app/Services/BookingService.php  (on-demand + rate limiting)
+// app/Services/BookingService.php  (on-demand notifications)
 // ============================================================
+
+namespace App\Services;
+
+use App\Models\Booking;
+use App\Notifications\BookingConfirmedNotification;
+use Illuminate\Support\Facades\Notification;
+
+class BookingService
+{
+    // Send to a User model
+    public function notifyUser(Booking $booking): void
+    {
+        $booking->school->admin->notify(new BookingConfirmedNotification($booking));
+    }
+
+    // Send to a parent with no User account — just email + phone
+    public function notifyParent(Booking $booking, string $email, string $phone): void
+    {
+        Notification::route('mail', $email)
+            ->route('vonage', $phone)
+            ->notify(new BookingConfirmedNotification($booking));
+    }
+}
+
+
+// ============================================================
+// Tips
+// ============================================================
+
+// ─── Custom channel ──────────────────────────────────────────
+// Must implement send(mixed $notifiable, Notification $notification): void
+// Laravel calls send() automatically when the channel is listed in via()
+// Use WhatsAppChannel::class in via() — not a string like 'whatsapp'
+// No interface required — just the method name must be send()
+
+// ─── Value object (WhatsAppMessage) ──────────────────────────
+// Plain class — no Laravel base class needed
+// Holds message data ($content) — nothing else
+// toWhatsApp() returns it — channel reads ->content from it
+// Same idea as Laravel's own MailMessage / VonageMessage
+// new static($content) → same as new WhatsAppMessage($content)
+//   static = "this class" — safer than hardcoding the name for subclasses
+
+// ─── routeNotificationFor ────────────────────────────────────
+// Laravel builds the method name from the channel name automatically
+//   'whatsapp' → routeNotificationForWhatsApp()
+//   'mail'     → routeNotificationForMail()     (built-in, reads ->email)
+//   'vonage'   → routeNotificationForVonage()   (built-in, reads ->phone)
+// Return the address the channel needs (phone, email, token...)
+// If method is missing, Laravel falls back to ->email or ->phone
+
+// ─── $notifiable vs $notification ───────────────────────────
+// $notifiable   → WHO you send to    → the User model (has ->phone, ->email)
+// $notification → WHAT you send      → BookingConfirmedNotification (has toWhatsApp())
+// In send(): read address from $notifiable, read content from $notification
+
+// ─── Rate limiting ────────────────────────────────────────────
+// RateLimiter::attempt($key, $max, $callback, $decaySeconds)
+//   $key          → unique string per user + notification type
+//   $max          → max attempts allowed in the window
+//   $callback     → what to run if not limited
+//   $decaySeconds → window length in seconds (3600 = 1 hour)
+//   returns true  → callback ran (under limit)
+//   returns false → limit exceeded, callback skipped
+// key format: "channel:{userId}:{notificationId}"
+//   getKey() → returns the model's primary key (same as ->id but safer)
+
+// ─── On-demand notifications ─────────────────────────────────
+// Use when you have no User model — just a raw email or phone number
+// Notification::route('channel', 'address')->notify(new SomeNotification())
+// Chain multiple routes for different channels
+// routeNotificationFor*() is NOT called — address is passed directly
+//
+// $user->notify()         → real User in the database, has account, has id
+//                           Laravel calls routeNotificationFor*() to get address
+//                           can store in notifications table (database channel)
+//
+// Notification::route()   → no User model — just a raw email or phone
+//                           you pass the address directly, no lookup needed
+//                           cannot use database channel — no user id to attach to
+//                           use for: parents, guests, anyone without an account
+//
+// Real world:
+//   school admin (has account)  → $admin->notify()
+//   parent (no account)         → Notification::route('mail', 'parent@example.com')
+
+// ─── NotificationSent event ──────────────────────────────────
+// Laravel fires this automatically after every successful send
+// $event->channel      → 'mail', 'database', WhatsAppChannel::class
+// $event->notifiable   → the User (or anonymous for on-demand)
+// $event->notification → the Notification object sent
+// Use for: logging, analytics, delivery tracking
+
+// ─── Artisan ─────────────────────────────────────────────────
+// php artisan make:notification BookingConfirmedNotification
+// php artisan event:list   → shows all registered event → listener mappings

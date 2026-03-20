@@ -67,7 +67,8 @@ $notification->markAsRead();
 
 ### Scenario
 
-Build a custom notification channel for WhatsApp and implement on-demand notifications (send to email/phone without a User model).
+Build a custom notification channel for WhatsApp and implement on-demand notifications 
+(send to email/phone without a User model).
 
 ### Requirements
 

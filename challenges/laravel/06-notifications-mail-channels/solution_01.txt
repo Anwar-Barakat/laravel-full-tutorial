@@ -9,20 +9,221 @@
 // app/Notifications/BookingConfirmedNotification.php
 // ============================================================
 
+namespace App\Notifications;
+
+use App\Models\Booking;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Notifications\Messages\BroadcastMessage;
+use Illuminate\Notifications\Messages\MailMessage;
+use Illuminate\Notifications\Messages\VonageMessage;
+use Illuminate\Notifications\Notification;
+
+class BookingConfirmedNotification extends Notification implements ShouldQueue
+{
+    use Queueable;
+
+    public function __construct(public readonly Booking $booking) {}
+
+    public function via(object $notifiable): array
+    {
+        $channels = ['mail', 'database'];
+
+        if ($notifiable->phone) {
+            $channels[] = 'vonage';
+        }
+
+        return $channels;
+    }
+
+    public function toMail(object $notifiable): MailMessage
+    {
+        return (new MailMessage)
+            ->subject('Booking Confirmed')
+            ->markdown('mail.booking-confirmed', ['booking' => $this->booking]);
+    }
+
+    public function toArray(object $notifiable): array
+    {
+        return [
+            'message' => 'Booking Confirmed',
+            'booking' => [
+                'booking_id'       => $this->booking->id,
+                'school_name'      => $this->booking->school?->name,
+                'destination_name' => $this->booking->destination?->name,
+                'amount'           => $this->booking->amount,
+                'student_count'    => $this->booking->student_count,
+                'trip_date'        => $this->booking->trip_date,
+            ],
+        ];
+    }
+
+    public function toVonage(object $notifiable): VonageMessage
+    {
+        return (new VonageMessage)
+            ->content("Booking confirmed! Trip to {$this->booking->destination?->name} on {$this->booking->trip_date->format('d M Y')}.");
+    }
+
+    public function toBroadcast(object $notifiable): BroadcastMessage
+    {
+        return new BroadcastMessage([
+            'booking_id' => $this->booking->id,
+            'message'    => 'Your booking has been confirmed.',
+        ]);
+    }
+}
+
 
 // ============================================================
-// resources/views/mail/booking-confirmed.blade.php  (Markdown)
+// resources/views/mail/booking-confirmed.blade.php
 // ============================================================
 
+@component('mail::message')
+
+# Booking Confirmed
+
+Dear {{ $booking->school->name }},
+
+Your booking has been confirmed.
+
+@component('mail::table')
+| Details     | Value                                        |
+|-------------|----------------------------------------------|
+| Destination | {{ $booking->destination->name }}            |
+| Trip Date   | {{ $booking->trip_date->format('d M Y') }}   |
+| Students    | {{ $booking->student_count }}                |
+| Amount      | AED {{ number_format($booking->amount, 2) }} |
+@endcomponent
+
+@component('mail::button', ['url' => route('bookings.show', $booking)])
+View Booking
+@endcomponent
+
+@endcomponent
 
 
 // ============================================================
 // app/Models/User.php  (add Notifiable trait)
 // ============================================================
 
+namespace App\Models;
+
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Notifications\Notifiable;
+
+class User extends Authenticatable
+{
+    use Notifiable;
+}
 
 
 // ============================================================
-// database/migrations/xxxx_create_notifications_table.php
-// (run: php artisan notifications:table)
+// app/Http/Controllers/NotificationController.php
 // ============================================================
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+
+class NotificationController extends Controller
+{
+    public function index(Request $request)
+    {
+        return auth()->user()->notifications()->latest()->paginate($request->input('per_page', 20));
+    }
+
+    public function markAsRead(string $id)
+    {
+        auth()->user()->notifications()->findOrFail($id)->markAsRead();
+
+        return response()->noContent();
+    }
+
+    public function markAllAsRead()
+    {
+        auth()->user()->unreadNotifications->markAsRead();
+
+        return response()->noContent();
+    }
+}
+
+
+// ============================================================
+// app/Services/BookingService.php  (dispatch notification)
+// ============================================================
+
+namespace App\Services;
+
+use App\Models\Booking;
+use App\Notifications\BookingConfirmedNotification;
+use Illuminate\Support\Facades\Notification;
+
+class BookingService
+{
+    public function createBooking(array $data): Booking
+    {
+        $booking = Booking::create($data);
+
+        // Single user
+        $booking->school->admin->notify(new BookingConfirmedNotification($booking));
+
+        // Multiple users at once
+        Notification::send($booking->school->users, new BookingConfirmedNotification($booking));
+
+        return $booking;
+    }
+}
+
+
+// ============================================================
+// database  — required migration for database channel
+// ============================================================
+
+// php artisan notifications:table
+// php artisan migrate
+
+
+// ============================================================
+// Tips
+// ============================================================
+
+// ─── via() ───────────────────────────────────────────────────
+// via($notifiable)        → returns array of channels to use
+//   $notifiable           → the model being notified (usually User)
+//   check user preferences here — don't hardcode all channels
+//   ['mail', 'database', 'vonage', 'broadcast']
+
+// ─── Channels ────────────────────────────────────────────────
+// toMail()      → email  — return (new MailMessage)->subject()->markdown()
+// toArray()     → database — stored in notifications table as JSON
+// toVonage()    → SMS via Vonage — return (new VonageMessage)->content()
+// toBroadcast() → real-time push — return new BroadcastMessage([...])
+//   method name must match the channel string in via() exactly
+
+// ─── toMail() ────────────────────────────────────────────────
+// ->line('text')                     → simple text line
+// ->action('Label', $url)            → button — TWO args: label then URL
+// ->markdown('view', ['key' => $val])→ Markdown Blade template (recommended)
+//   mail::message → outer wrapper
+//   mail::table   → data table — header row FIRST, then |---|---| separator
+//   mail::button  → CTA button
+
+// ─── toArray() / database channel ────────────────────────────
+// stored in notifications table → data column as JSON
+// $user->notifications                        → all (query builder)
+// $user->unreadNotifications                  → unread only (Collection, no parentheses)
+// $user->notifications()->findOrFail($id)     → find one by UUID string
+// $notification->markAsRead()                 → mark one as read
+// $user->unreadNotifications->markAsRead()    → mark all as read
+
+// ─── Dispatching ─────────────────────────────────────────────
+// $user->notify(new BookingConfirmedNotification($booking))      → one user
+// Notification::send($users, new BookingConfirmedNotification()) → multiple users
+
+// ─── Notifiable trait ────────────────────────────────────────
+// use Notifiable on User   → required to call ->notify() on the model
+//   gives: notify(), notifications(), unreadNotifications, readNotifications
+
+// ─── Artisan ─────────────────────────────────────────────────
+// php artisan notifications:table                    → creates notifications migration
+// php artisan make:notification BookingConfirmedNotification
