@@ -1,0 +1,163 @@
+// SOLUTION 01 — Failing Test Debug: Identifying the 4 Bugs
+// Topic: Reading failing tests to diagnose broken application code
+// Approach: Map each failing test to its root cause in Booking.php
+
+// ============================================================
+// HOW TO READ FAILING TESTS BEFORE TOUCHING ANY CODE
+// ============================================================
+
+// Step 1: Run the tests and read the failure messages carefully
+//   php artisan test --filter BookingTest
+//
+// Each failure message tells you:
+//   - Which assertion failed
+//   - What value was expected
+//   - What value was actually returned
+//
+// Read the test code, not just the output — the test defines the contract
+// The model must satisfy the contract; the test must not change
+
+// ============================================================
+// BUG 1 — Accessor name mismatch (Test: test_booking_total_price_calculates_correctly)
+// ============================================================
+
+// What the test expects:
+//   $booking->total_price  — accessing the 'total_price' computed attribute
+//
+// What the model provides:
+//   public function getTotalAmountAttribute()  — this exposes $booking->total_amount
+//
+// Laravel accessor naming: getTotalPriceAttribute() → exposes $booking->total_price
+//                          getTotalAmountAttribute() → exposes $booking->total_amount
+//
+// The refactor renamed the method from getTotalPriceAttribute to getTotalAmountAttribute
+// This broke the $booking->total_price access the test relies on
+//
+// Fix: Rename the method back to getTotalPriceAttribute()
+//
+// Alternative fix (Laravel 9+ style): use a get attribute closure on a typed property
+//   protected function totalPrice(): Attribute
+//   {
+//       return Attribute::make(
+//           get: fn() => $this->student_count * $this->price_per_student
+//       );
+//   }
+//
+// If you want BOTH $booking->total_price AND $booking->total_amount to work,
+// add the correct name to the $appends array and define both accessors (or alias one)
+
+// ============================================================
+// BUG 2 — Assignment operator instead of comparison (Test: test_booking_is_overdue_when_unpaid_after_7_days)
+// ============================================================
+
+// What the test expects:
+//   isOverdue() returns true when status is 'pending' AND created_at is > 7 days ago
+//
+// What the model has:
+//   if ($this->status = 'pending' && ...)
+//   ^ single equals sign — this is ASSIGNMENT, not comparison
+//
+// Effect of the bug:
+//   $this->status is being SET to 'pending' (the assignment returns the assigned value)
+//   In PHP, a non-empty string assignment evaluates to truthy
+//   So the condition is ALWAYS true regardless of actual status
+//   This means isOverdue() returns true even for confirmed/cancelled bookings
+//
+// This is a classic PHP bug — PHP does not prevent assignment inside an if condition
+// The test will actually pass if status happens to be 'pending'
+// But it creates a silent data mutation: calling isOverdue() changes the model's status
+//
+// Fix: Change = to === (strict comparison)
+//   if ($this->status === 'pending' && $this->created_at->diffInDays(now()) > 7)
+//
+// Why === over ==:
+//   == is loose comparison and would coerce types (not an issue for strings, but best practice)
+//   === ensures both value AND type match
+
+// ============================================================
+// BUG 3 — Missing query scope (Test: test_booking_scope_pending_returns_only_pending)
+// ============================================================
+
+// What the test expects:
+//   Booking::pending()->get()  — calling a local query scope named 'pending'
+//
+// What the model has:
+//   The scope method was removed during the refactor — it no longer exists
+//
+// Laravel local scope convention: scopePending(Builder $query) → called as ::pending()
+//   The 'scope' prefix is stripped — scopePending becomes ::pending()
+//   The method receives the query builder instance and modifies it
+//
+// Fix: Add the missing scope method back to the Booking model:
+//   public function scopePending(Builder $query): void
+//   {
+//       $query->where('status', 'pending');
+//   }
+//
+// Import: use Illuminate\Database\Eloquent\Builder at the top of the file
+//
+// How this is called by the test:
+//   Booking::pending()->get()
+//   Laravel sees 'pending', looks for scopePending on the model, calls it
+//   The scope adds WHERE status = 'pending' to the query
+
+// ============================================================
+// BUG 4 — Observer not registered (Test: test_booking_confirmation_email_sent_on_creation)
+// ============================================================
+
+// What the test expects:
+//   Mail::fake() intercepts outgoing mail
+//   After Booking::factory()->create(), a BookingConfirmationMail should have been sent
+//   Mail::assertSent(BookingConfirmationMail::class) confirms this
+//
+// What the model has:
+//   The comment says "BookingObserver exists in app/Observers/ but is never booted"
+//   An observer class that is not registered will NEVER fire — its methods are ignored
+//
+// Laravel observer registration requires one of:
+//
+//   Option A: Register in AppServiceProvider::boot()
+//     Booking::observe(BookingObserver::class);
+//
+//   Option B: Use the #[ObservedBy] attribute on the model (Laravel 10+)
+//     #[ObservedBy(BookingObserver::class)]
+//     class Booking extends Model { ... }
+//
+//   Option C: Register in a dedicated service provider
+//
+// The BookingObserver must have a 'created' method that sends the mail:
+//   public function created(Booking $booking): void
+//   {
+//       Mail::to($booking->contact_email)->send(new BookingConfirmationMail($booking));
+//   }
+//
+// Why Mail::fake() matters in tests:
+//   Mail::fake() intercepts all mail dispatch and prevents actual sending
+//   This makes tests fast and deterministic
+//   Mail::assertSent() then checks whether the mail class was dispatched
+
+// ============================================================
+// SUMMARY OF ALL 4 BUGS
+// ============================================================
+
+// Bug 1 — app/Models/Booking.php
+//   getTotalAmountAttribute() → rename to getTotalPriceAttribute()
+//
+// Bug 2 — app/Models/Booking.php
+//   if ($this->status = 'pending') → if ($this->status === 'pending')
+//
+// Bug 3 — app/Models/Booking.php
+//   Add: public function scopePending(Builder $query): void
+//
+// Bug 4 — app/Providers/AppServiceProvider.php (or model attribute)
+//   Add: Booking::observe(BookingObserver::class); in boot()
+//   And ensure BookingObserver::created() sends BookingConfirmationMail
+
+// ============================================================
+// DEBUGGING WORKFLOW TIP
+// ============================================================
+
+// When tests fail after a refactor, compare the git diff of the model:
+//   git diff HEAD~1 app/Models/Booking.php
+// This shows exactly what changed and makes the bugs immediately visible
+// Always run the full test suite before and after a refactor to catch regressions early

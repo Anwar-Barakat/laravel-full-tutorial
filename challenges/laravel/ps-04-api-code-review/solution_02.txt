@@ -1,0 +1,149 @@
+// SOLUTION 02 — Fixed version walkthrough (comment skeleton)
+// =========================================================
+// This solution describes the corrected implementation piece by piece,
+// covering routes, request validation, controller, and model.
+
+// ---------------------------------------------------------
+// FIXED ROUTES — routes/api.php
+// ---------------------------------------------------------
+// Wrap all booking routes in auth:sanctum middleware group so that
+// every request must carry a valid Sanctum token.
+//
+// Use Route::apiResource('bookings', BookingController::class)
+//   instead of three separate Route::get/post/delete calls.
+//   apiResource registers index, store, show, update, destroy in one line.
+//   It uses the correct HTTP verbs and URI conventions automatically.
+//   It also names the routes (bookings.index, bookings.store, etc.)
+//   which makes URL generation and testing cleaner.
+//
+//   Route::middleware('auth:sanctum')->group(function () {
+//       Route::apiResource('bookings', BookingController::class)
+//   })
+
+// ---------------------------------------------------------
+// FIXED MODEL — Booking.php
+// ---------------------------------------------------------
+// Define $fillable explicitly — list only the columns that should be
+// mass-assignable from user input:
+//   protected $fillable = ['trip_id', 'school_id', 'user_id', 'notes']
+//
+// Do NOT include 'status', 'amount', 'payment_reference' in $fillable —
+// those should only be set programmatically by the application, never
+// directly from a user HTTP request.
+//
+// Add 'use SoftDeletes;' so that destroy() sets deleted_at instead of
+// permanently removing the record. Booking records should be auditable.
+//
+// Define relationships:
+//   belongsTo School, belongsTo Trip, belongsTo User, hasMany Payment
+
+// ---------------------------------------------------------
+// FIXED FORM REQUEST — StoreBookingRequest.php
+// ---------------------------------------------------------
+// Create: php artisan make:request StoreBookingRequest
+//
+// authorize():
+//   return $this->user() !== null
+//   Or check: Gate::allows('create-booking') for finer control
+//
+// rules():
+//   'trip_id'   => ['required', 'integer', 'exists:trips,id']
+//     — exists check prevents booking a trip that does not exist
+//   'school_id' => ['required', 'integer', 'exists:schools,id']
+//   'notes'     => ['nullable', 'string', 'max:1000']
+//     — nullable: optional field, but if present must be a string
+//
+// The FormRequest handles validation BEFORE the controller runs.
+// If validation fails, Laravel automatically returns 422 Unprocessable
+// Entity with a structured errors JSON body — no try/catch needed.
+
+// ---------------------------------------------------------
+// FIXED CONTROLLER — BookingController.php
+// ---------------------------------------------------------
+// Constructor:
+//   Call $this->authorizeResource(Booking::class, 'booking') in __construct
+//   This applies the BookingPolicy to all resource methods automatically.
+//   No need to call $this->authorize() in each individual method.
+//
+// index(Request $request):
+//   Build query: Booking::query()
+//   Apply school_id filter at DB level using when():
+//     ->when($request->school_id, fn($q, $v) => $q->where('school_id', $v))
+//   Eager load relationships if needed:
+//     ->with(['school:id,name', 'trip:id,destination'])
+//   Paginate: ->paginate(15)
+//   Return: BookingResource::collection($bookings)
+//     — collection() wraps each item and adds pagination meta links
+//
+// store(StoreBookingRequest $request):
+//   $booking = Booking::create($request->validated())
+//     — validated() returns only the fields that passed the rules
+//   return new BookingResource($booking), 201
+//     — 201 Created: correct status for successful resource creation
+//
+// show(Booking $booking):
+//   $booking->loadMissing(['school', 'trip', 'payments'])
+//   return new BookingResource($booking)
+//   Route model binding auto-resolves and auto-404s — no findOrFail needed
+//
+// update(UpdateBookingRequest $request, Booking $booking):
+//   $booking->update($request->validated())
+//   return new BookingResource($booking->refresh())
+//
+// destroy(Booking $booking):
+//   $booking->delete()   — soft delete, sets deleted_at
+//   return response()->noContent()
+//     — 204 No Content: correct status for successful DELETE
+//     — Empty body: no JSON, no 'message' key needed
+
+// ---------------------------------------------------------
+// FIXED API RESOURCE — BookingResource.php
+// ---------------------------------------------------------
+// toArray():
+//   return only the fields the API consumer needs:
+//   'id', 'status', 'notes', 'created_at' — from the booking itself
+//   'school'  => new SchoolResource($this->whenLoaded('school'))
+//   'trip'    => new TripResource($this->whenLoaded('trip'))
+//
+//   Do NOT include: payment_reference, internal_notes, deleted_at, pivot columns.
+//   whenLoaded() ensures no lazy N+1 queries fire during serialisation.
+
+// ---------------------------------------------------------
+// BOOKING POLICY — BookingPolicy.php
+// ---------------------------------------------------------
+// Create: php artisan make:policy BookingPolicy --model=Booking
+//
+// viewAny($user):
+//   return true   — any authenticated user can list bookings
+//   (further scope filtering happens in the controller query)
+//
+// view($user, $booking):
+//   return $user->school_id === $booking->school_id || $user->isAdmin()
+//
+// create($user):
+//   return $user->hasRole('school_admin') || $user->isAdmin()
+//
+// update($user, $booking):
+//   return $user->school_id === $booking->school_id || $user->isAdmin()
+//   — only the booking's school admin or a Tripz admin can update
+//
+// delete($user, $booking):
+//   return $user->school_id === $booking->school_id || $user->isAdmin()
+//   — same rule: no cross-school deletion
+//
+// Register the policy in AuthServiceProvider:
+//   protected $policies = [Booking::class => BookingPolicy::class]
+
+// ---------------------------------------------------------
+// SUMMARY OF ALL 10 FIXES
+// ---------------------------------------------------------
+// 1.  $request->validated() instead of $request->all()              — mass assignment fix
+// 2.  auth:sanctum middleware on all routes                          — authentication
+// 3.  StoreBookingRequest with validation rules                      — input validation
+// 4.  paginate(15) instead of Booking::all()                        — performance
+// 5.  Query-level when() filter instead of Collection filter         — performance
+// 6.  Strict comparison / query-level filter (removes == issue)      — correctness
+// 7.  Route model binding or findOrFail() instead of find()          — null safety / 404
+// 8.  201 for store, 204 for destroy                                 — correct HTTP codes
+// 9.  BookingPolicy with authorizeResource()                         — authorisation
+// 10. BookingResource with whenLoaded()                              — data exposure / N+1

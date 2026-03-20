@@ -1,0 +1,123 @@
+// ============================================================
+// SOLUTION 01 — Bug Identification & Fixes (Bugs 1–4)
+// Challenge 20: Collection Chain Debug
+// ============================================================
+
+// ---------------------------------------------------------
+// BUG 1: Sum returns 0 instead of ~45000
+// ---------------------------------------------------------
+
+// What is wrong:
+// — Booking::all()->where('status', 'paid') uses the Collection's
+//   where() method, not the Query Builder's where() method.
+// — The Collection where() method does a LOOSE (==) comparison
+//   by default, not a strict (===) comparison.
+// — If the 'amount' column is retrieved from the DB as a string
+//   (e.g. "150.00") rather than a float, then ->sum('amount')
+//   on the Collection will attempt to sum string values, which
+//   PHP coerces — but the real problem is that the where() filter
+//   may be matching zero rows if the stored status value has
+//   unexpected casing or whitespace.
+// — More commonly: the amount column has no cast in the model,
+//   so it arrives as a string. The sum of strings is 0 in some
+//   PHP/collection edge cases, or the where filter silently
+//   returns an empty collection due to a type mismatch.
+
+// Root cause summary:
+// — Missing cast on the Booking model: 'amount' should be cast
+//   to 'decimal:2' or 'float' so Collection sum() works correctly.
+// — Alternative root cause: the where() filter is not matching
+//   because of a type mismatch between the stored value and 'paid'.
+
+// Fix approach:
+// — Add a cast to the Booking model: 'amount' => 'decimal:2'
+//   so Collection receives a numeric value, not a string.
+// — Better fix: push the filter to the query level to avoid
+//   loading all bookings into memory just to filter them:
+//   Booking::where('status', 'paid')->sum('amount')
+//   This is a DB-level aggregation — faster and correct.
+// — If loading into Collection is required: use ->filter()
+//   with strict comparison instead of ->where():
+//   ->filter(fn($b) => $b->status === 'paid')->sum('amount')
+
+// ---------------------------------------------------------
+// BUG 2: Destinations contain duplicates
+// ---------------------------------------------------------
+
+// What is wrong:
+// — The chain maps trips to their destination strings, then sorts.
+// — There is no call to ->unique() in the chain.
+// — Multiple trips can share the same destination (e.g. three
+//   trips all go to "Dubai"). After ->map(), the collection
+//   contains three "Dubai" entries. ->sort() reorders them but
+//   does NOT remove duplicates.
+
+// Root cause summary:
+// — Missing ->unique() step in the chain.
+
+// Fix approach:
+// — Add ->unique() after ->map() and before ->sort():
+//   Trip::all()->map(fn($t) => $t->destination)->unique()->sort()->values()
+// — ->unique() on a string collection removes duplicate string values.
+// — ->values() reindexes the keys after sort() and unique(), which
+//   can leave gaps in numeric keys.
+
+// ---------------------------------------------------------
+// BUG 3: Missing months with zero bookings
+// ---------------------------------------------------------
+
+// What is wrong:
+// — ->groupBy() only creates keys for months that have at least
+//   one booking. If January 2024 has no bookings, there is no
+//   '2024-01' key in the resulting collection.
+// — The count map then only has entries for months that existed
+//   in the grouped result. Months with zero bookings are absent.
+
+// Root cause summary:
+// — Collections cannot produce keys for data that does not exist.
+//   You must explicitly create the full set of expected keys and
+//   then merge the actual data into them.
+
+// Fix approach:
+// — Build a skeleton array of all 12 months of 2024, each with
+//   a value of 0:
+//   collect(['2024-01' => 0, '2024-02' => 0, ..., '2024-12' => 0])
+//   or generate it programmatically with a loop using Carbon.
+// — Group and count the actual bookings as before.
+// — Merge the actual counts into the skeleton using array_merge()
+//   or Collection ->merge():
+//   $skeleton->merge($actualCounts)
+//   — Keys in $actualCounts overwrite the zeros in $skeleton.
+//   — Keys in $skeleton that are not in $actualCounts remain as 0.
+// — Sort by key to ensure chronological order: ->sortKeys()
+
+// ---------------------------------------------------------
+// BUG 4: Pending bookings not saved to DB
+// ---------------------------------------------------------
+
+// What is wrong:
+// — ->each() iterates over each Eloquent model in the collection
+//   and runs the closure.
+// — Inside the closure, $booking->status = 'confirmed' sets the
+//   attribute on the PHP object in memory.
+// — However, ->save() is never called, so the change is NEVER
+//   written to the database.
+// — When the request ends, the PHP objects are garbage-collected
+//   and the change is lost.
+
+// Root cause summary:
+// — Mutating a PHP object in memory does not persist to the DB.
+//   You must explicitly call save() or use a query-level update.
+
+// Fix approach A: call save() inside each()
+// — Modify the closure to call $booking->save() after setting status.
+// — This issues one UPDATE query per booking (N queries total).
+// — Acceptable for small numbers of bookings; avoid for large sets.
+
+// Fix approach B: use a single query-level mass update
+// — Use the Query Builder to update all matching rows in one SQL statement:
+//   Booking::where('status', 'pending')->update(['status' => 'confirmed'])
+// — This is a single SQL UPDATE with a WHERE clause — much more efficient.
+// — Caveat: query-level update does NOT fire Eloquent model events
+//   (updating, updated). If your app relies on those events, use Fix A.
+// — For large datasets (hundreds+), always prefer Fix B.

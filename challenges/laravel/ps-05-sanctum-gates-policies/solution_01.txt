@@ -1,0 +1,153 @@
+SOLUTION 01 — Sanctum Auth Flow + Policy Method Signatures
+============================================================
+Focus: How the authentication layer works and what each policy method does
+
+This file contains PHP comment skeletons only. No executable code.
+
+──────────────────────────────────────────────
+PART 1: AuthController — login()
+──────────────────────────────────────────────
+
+// Step 1 — validate the incoming request
+// require 'email' (string, email format) and 'password' (string)
+// use $request->validate([...]) — throws 422 automatically on failure
+
+// Step 2 — attempt authentication
+// Auth::attempt(['email' => ..., 'password' => ...]) returns true/false
+// This handles the Hash::check() comparison internally — never compare passwords manually
+// If attempt returns false, return a 401 JSON response with a message
+
+// Step 3 — retrieve the authenticated user
+// Auth::user() is now populated after a successful attempt
+
+// Step 4 — create a Sanctum personal access token
+// $token = $user->createToken('api-token')->plainTextToken
+// plainTextToken is the raw string the client will send in the Authorization header
+// The token is stored hashed in the personal_access_tokens table
+
+// Step 5 — return the response
+// return response()->json(['token' => $token, 'user' => $user], 200)
+// Include only safe user fields — avoid returning password hash
+
+──────────────────────────────────────────────
+PART 2: AuthController — logout()
+──────────────────────────────────────────────
+
+// The client sends: Authorization: Bearer <token>
+// Sanctum resolves this to the current token model via $request->user()->currentAccessToken()
+
+// Step 1 — delete the current token only (not all tokens)
+// $request->user()->currentAccessToken()->delete()
+// This invalidates just the one token the client is using
+
+// Step 2 — return 204 No Content (no body needed on logout)
+
+// Alternative: to log out from ALL devices
+// $request->user()->tokens()->delete()
+
+──────────────────────────────────────────────
+PART 3: Sanctum Middleware
+──────────────────────────────────────────────
+
+// All protected routes must use the auth:sanctum middleware
+// Route::middleware('auth:sanctum')->group(function () { ... })
+
+// When this middleware runs:
+// 1. It reads the Authorization: Bearer <token> header
+// 2. Looks up the token in personal_access_tokens table
+// 3. If valid, resolves the user and sets Auth::user()
+// 4. If missing or invalid, returns 401 automatically
+
+// For stateless APIs, ensure the api guard is configured to use Sanctum
+// In config/auth.php, the 'api' guard driver should be 'sanctum'
+
+──────────────────────────────────────────────
+PART 4: BookingPolicy — method signatures
+──────────────────────────────────────────────
+
+// Methods with NO model parameter — called for collection/create actions
+// These receive only the authenticated user
+
+// viewAny(User $user): bool
+// — Should return true for any authenticated user
+// — The query-level filtering (which bookings they see) is done in the controller/scope, not here
+// — return true; is a valid and correct implementation
+
+// create(User $user): bool
+// — Only admin and school_admin can create bookings
+// — return in_array($user->role, ['admin', 'school_admin']);
+
+// Methods WITH a model parameter — called for single-resource actions
+// These receive the user AND the specific model instance
+
+// view(User $user, Booking $booking): bool
+// — admin: can view anything — return true
+// — school_admin: can view if $user->school_id === $booking->school_id
+// — parent: can view if $user->id === $booking->user_id (the parent who made it)
+// — Use a match/if chain on $user->role
+
+// update(User $user, Booking $booking): bool
+// — admin: return true
+// — school_admin: return $user->school_id === $booking->school_id
+// — parent: return false (parents cannot update bookings)
+
+// delete(User $user, Booking $booking): bool
+// — admin only: return $user->role === 'admin'
+
+──────────────────────────────────────────────
+PART 5: TripPolicy — method signatures
+──────────────────────────────────────────────
+
+// create(User $user): bool
+// — return $user->role === 'admin'
+
+// delete(User $user, Trip $trip): bool
+// — return $user->role === 'admin'
+// — Trip $trip parameter is present even though the check is only on the user
+// — Laravel requires the model param in the signature for resource policies
+
+──────────────────────────────────────────────
+PART 6: Role checks — pattern reference
+──────────────────────────────────────────────
+
+// Simple role check
+// $user->role === 'admin'
+
+// Multi-role check
+// in_array($user->role, ['admin', 'school_admin'])
+
+// School ownership check (key concept for this challenge)
+// $user->school_id === $booking->school_id
+// Both are integers — strict equality is correct here
+
+// Parent ownership check
+// $user->id === $booking->user_id
+
+──────────────────────────────────────────────
+PART 7: AuthServiceProvider — policy registration
+──────────────────────────────────────────────
+
+// The $policies array maps model class to policy class
+// [
+//     Booking::class => BookingPolicy::class,
+//     Trip::class    => TripPolicy::class,
+// ]
+
+// Once registered, $this->authorize('update', $booking) in a controller
+// automatically resolves to BookingPolicy::update($user, $booking)
+
+──────────────────────────────────────────────
+PART 8: BookingController — using authorize()
+──────────────────────────────────────────────
+
+// For actions on a collection (no specific model):
+// $this->authorize('viewAny', Booking::class)
+// Pass the class string, not an instance
+
+// For actions on a specific model:
+// $this->authorize('update', $booking)
+// Pass the model instance — Laravel infers the policy from its type
+
+// When authorization fails, Laravel throws AuthorizationException
+// In a JSON API context this becomes a 403 response automatically
+// unless Handler.php still redirects — override renderable() if needed

@@ -1,0 +1,114 @@
+// ============================================================
+// SOLUTION 02 — Normalisation Decisions & Intentional Denormalisation
+// Challenge 17: Schema Design Build
+// ============================================================
+
+// ---------------------------------------------------------
+// SECTION 1: NORMALISATION DECISIONS
+// ---------------------------------------------------------
+
+// Decision: school_contacts as a separate table, NOT a JSON column.
+// Reason: contact records need to be individually queried
+// (e.g. "find all billing contacts in UAE region"), filtered,
+// and updated without deserialising a JSON blob. A separate
+// table satisfies 1NF (atomic values) and allows a proper
+// unique constraint per contact type per school.
+
+// Decision: tags as a many-to-many pivot (trip_tag), NOT a
+// comma-separated string or JSON array on the trips table.
+// Reason: querying "all trips tagged adventure" requires a
+// full table scan with LIKE or JSON_CONTAINS if stored inline.
+// A pivot table allows a simple JOIN and supports indexing.
+
+// Decision: payments as a separate table, NOT columns on bookings.
+// Reason: bookings can have multiple instalments. Putting
+// payment_amount and payment_ref on the booking row would
+// only allow one payment record. Separate table = correct
+// 1NF and supports instalment history.
+
+// Decision: user roles stored as an ENUM / checked string on
+// the users table, NOT a separate roles table.
+// Reason: Tripz has a small, fixed set of roles (admin,
+// school_admin, parent). A full RBAC roles table adds join
+// complexity with no benefit at this scale. If roles grow,
+// migrate to Spatie Permission later.
+
+// ---------------------------------------------------------
+// SECTION 2: INTENTIONAL DENORMALISATIONS
+// ---------------------------------------------------------
+
+// Denormalisation 1: contact_email snapshot on bookings.
+// Why: A school may change its billing contact after a booking
+// is made. The booking confirmation email and invoice must
+// always show the address that was correct at time of booking.
+// Storing contact_email directly on the booking row (even
+// though school_contacts holds the authoritative address)
+// is a deliberate snapshot pattern — the denormalised column
+// wins for historical accuracy, not the FK-joined value.
+
+// Denormalisation 2: student_count stored on bookings.
+// Why: price_per_student lives on trips and may be updated
+// for future trips. If we always re-derive the booking total
+// from trips.price_per_student * bookings.student_count, a
+// price change on the trip would silently alter all historical
+// booking totals. Consider also snapshotting price_per_student
+// on the booking row at time of creation.
+
+// Denormalisation 3: activity_log payload (JSON).
+// Why: the audit log is write-once / read-rarely. Storing a
+// JSON snapshot of changed attributes avoids needing to
+// reconstruct "what did this field look like 6 months ago"
+// from a series of delta records. The redundancy is
+// acceptable because the data is never updated in place.
+
+// ---------------------------------------------------------
+// SECTION 3: SOFT DELETE JUSTIFICATION (EXTENDED)
+// ---------------------------------------------------------
+
+// bookings soft-deleted:
+// — A cancelled booking must keep its payment rows intact
+//   for finance reconciliation. If the booking row were
+//   hard-deleted, the payment rows would either orphan or
+//   cascade-delete, losing financial history.
+
+// schools soft-deleted:
+// — A deactivated school might re-enrol. Soft delete preserves
+//   all historical booking and user data under that school_id.
+// — Reporting dashboards often need "all bookings by school,
+//   including deactivated schools" — soft delete makes this
+//   a simple withTrashed() scope.
+
+// users soft-deleted:
+// — created_by / updated_by FK references on bookings mean
+//   hard-deleting a user would either fail the FK constraint
+//   or set the audit column to NULL, losing the audit trail.
+//   Soft delete keeps the user row (and the audit chain) intact.
+
+// trips NOT soft-deleted — justification:
+// — A draft trip with no bookings should be cleanly removable.
+// — Once a booking references a trip, the FK constraint on
+//   bookings.trip_id will prevent hard deletion, providing
+//   natural protection without needing a deleted_at column.
+// — Adding soft deletes to trips would require every capacity
+//   query to include WHERE trips.deleted_at IS NULL, adding
+//   noise to an already-busy join.
+
+// ---------------------------------------------------------
+// SECTION 4: SCHEMA EVOLUTION NOTES
+// ---------------------------------------------------------
+
+// If Tripz needs multi-currency support later:
+// — Add a currency_code (char 3) column to payments.
+// — Add a base_amount column (normalised to one currency)
+//   for aggregate reporting without conversion at query time.
+
+// If Tripz needs per-trip discount codes:
+// — Add a discount_codes table with a booking_discount pivot.
+// — Do NOT add discount_code string to the booking row
+//   (violates 2NF if the discount amount depends on the code,
+//   not on the booking itself).
+
+// If roles need fine-grained permissions later:
+// — Migrate to Spatie Laravel Permission (roles + permissions
+//   tables with a polymorphic model_has_roles pivot).
+// — Current ENUM approach is easily replaced by a role_id FK.

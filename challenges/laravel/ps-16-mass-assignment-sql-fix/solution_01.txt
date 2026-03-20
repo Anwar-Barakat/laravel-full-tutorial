@@ -1,0 +1,145 @@
+// SOLUTION 01 — Fixing Mass Assignment (BookingController and Booking Model)
+// ===========================================================================
+
+// ---------------------------------------------------------------
+// CONCEPT — What is mass assignment and why is it dangerous?
+// ---------------------------------------------------------------
+
+// Mass assignment means passing a raw array of user-supplied key/value pairs
+// directly into a model's fill() or create() or update() methods.
+// The danger: the user controls the keys. If the database has a column called
+// "is_admin" or "role" or "amount", the user can set it by including it in
+// their request body — even if your HTML form doesn't have that field.
+
+// Laravel provides two complementary guards against this:
+//   - $fillable on the model: explicit ALLOW-list of column names
+//   - $guarded on the model: explicit DENY-list of column names
+// Additionally, using $request->validated() in the controller means only
+// fields that passed your validation rules are ever passed to the model.
+
+// ---------------------------------------------------------------
+// FIX 1 — Booking model: define $fillable
+// ---------------------------------------------------------------
+
+// The Booking model currently has neither $fillable nor $guarded.
+// Laravel's default behaviour when neither is set is to throw a
+// MassAssignmentException for every field — UNLESS $guarded = [] is
+// set, which disables all mass-assignment protection entirely.
+
+// Define $fillable to list only the columns a user is ever allowed to write:
+//   protected $fillable = [
+//       'school_id',
+//       'trip_id',
+//       'student_count',
+//       'special_requirements',
+//       'contact_name',
+//       'contact_email',
+//   ];
+
+// Columns deliberately NOT in $fillable:
+//   - id             (auto-increment, never user-set)
+//   - amount         (calculated by the system, not the user)
+//   - status         (set by business logic, not user input)
+//   - is_paid        (set by payment webhook, not user)
+//   - admin_notes    (set by Tripz staff only)
+//   - created_at     (managed by Eloquent)
+//   - updated_at     (managed by Eloquent)
+// Even if a user includes these in their request, Eloquent will silently
+// ignore them because they are not in $fillable.
+
+// ---------------------------------------------------------------
+// FIX 2 — BookingController store(): use FormRequest + validated()
+// ---------------------------------------------------------------
+
+// Create a dedicated FormRequest class: StoreBookingRequest.
+// Place it in app/Http/Requests/StoreBookingRequest.php.
+
+// In authorize(): return true (or check permissions if needed).
+
+// In rules(), define validation for every accepted field:
+//   'school_id'             => 'required|integer|exists:schools,id'
+//   'trip_id'               => 'required|integer|exists:trips,id'
+//   'student_count'         => 'required|integer|min:1|max:200'
+//   'special_requirements'  => 'nullable|string|max:1000'
+//   'contact_name'          => 'required|string|max:255'
+//   'contact_email'         => 'required|email|max:255'
+
+// In the controller, type-hint StoreBookingRequest instead of Request.
+// Laravel automatically validates the request before handle() is called.
+// If validation fails, a 422 JSON response is returned automatically.
+
+// Replace fill($request->all()) with:
+//   $booking = Booking::create($request->validated());
+// $request->validated() returns ONLY the fields declared in rules().
+// Any extra fields the user sends (e.g. "role", "amount") are not in
+// validated() and are therefore never passed to the model.
+
+// Using Booking::create() rather than new + fill + save is equivalent
+// but more concise. It still respects $fillable as a second layer.
+
+// ---------------------------------------------------------------
+// FIX 3 — BookingController update(): separate rules, exclude immutable fields
+// ---------------------------------------------------------------
+
+// Create UpdateBookingRequest with its own rules():
+//   'student_count'         => 'sometimes|integer|min:1|max:200'
+//   'special_requirements'  => 'nullable|string|max:1000'
+//   'contact_name'          => 'sometimes|string|max:255'
+//   'contact_email'         => 'sometimes|email|max:255'
+
+// Notice: school_id and trip_id are NOT in the update rules.
+// This means even if the user sends them, $request->validated() will
+// not include them and the model will not update them.
+
+// Replace $booking->update($request->all()) with:
+//   $booking->update($request->validated());
+
+// ---------------------------------------------------------------
+// CONCEPT — $fillable vs $guarded vs $guarded = []
+// ---------------------------------------------------------------
+
+// $fillable = ['col1', 'col2']
+//   ALLOW-list. Only listed columns can be mass-assigned.
+//   Safest approach. Requires you to explicitly list every field.
+//   Adding a new column to the database does NOT automatically expose it.
+
+// $guarded = ['id', 'is_admin']
+//   DENY-list. Listed columns cannot be mass-assigned; everything else can.
+//   Riskier. Adding a new column to the database automatically exposes it
+//   for mass assignment unless you remember to add it to $guarded.
+
+// $guarded = []
+//   Disables ALL mass-assignment protection.
+//   Every column in the table is writable via fill()/create()/update().
+//   This is used in seeders/factories for convenience, but should NEVER
+//   be on a production model that handles user input.
+//   Even if you use $request->only() in the controller, $guarded = []
+//   means any other code path that calls fill($request->all()) anywhere
+//   in the app is fully vulnerable.
+
+// ---------------------------------------------------------------
+// FIX 4 — Booking model: $hidden for sensitive fields
+// ---------------------------------------------------------------
+
+// The $hidden property tells Eloquent to exclude columns from JSON
+// serialisation and array conversion. Use it for fields that should
+// never appear in an API response:
+//   protected $hidden = ['admin_notes', 'amount', 'is_paid'];
+
+// This means even if SELECT * is run and the model is returned as JSON,
+// admin_notes, amount, and is_paid will not appear in the response.
+// This is a last-resort output filter, not a substitute for proper
+// validation and $fillable.
+
+// ---------------------------------------------------------------
+// LAYERED DEFENCE SUMMARY
+// ---------------------------------------------------------------
+
+// Layer 1 — FormRequest validation: controls what fields are accepted.
+// Layer 2 — $request->validated(): only validated fields reach the model.
+// Layer 3 — $fillable on the model: model-level allow-list regardless of input.
+// Layer 4 — $hidden on the model: sensitive fields never leak in responses.
+// Layer 5 — API Resource: explicit serialisation control for every response.
+
+// Each layer is independent. If one is misconfigured, the others still
+// provide protection. This is defence-in-depth applied to a controller.

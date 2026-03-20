@@ -1,0 +1,158 @@
+SOLUTION 01 — Repository Pattern: Why, How, and Wiring
+======================================================
+Focus: EloquentBookingRepository implementation approach, interface binding, and testability
+
+This file contains PHP comment skeletons only. No executable code.
+
+──────────────────────────────────────────────
+PART 1: Why abstract over Eloquent?
+──────────────────────────────────────────────
+
+// The problem: if your controller or service calls Booking::where(...) directly,
+// tests that exercise that code path need a real database with real data
+// This makes unit tests slow, fragile, and hard to run in CI without setup
+
+// The solution: hide the data source behind an interface
+// Controllers and services only know about BookingRepositoryInterface
+// Tests can swap in InMemoryBookingRepository — no DB required
+
+// Secondary benefit: swap storage engines
+// If Tripz moves from MySQL to MongoDB or adds a caching layer,
+// you write a new repository class (MongoBookingRepository, CachedBookingRepository)
+// and change ONE line in AppServiceProvider — no controller code changes
+
+// When the repository pattern is NOT worth it:
+// — Small CRUD apps where testability is not a priority
+// — When you're using Eloquent features heavily (complex relationships, scopes)
+//   and the abstraction would require reimplementing them in the interface
+// For Tripz at scale, it is worth it for the Booking model specifically
+
+──────────────────────────────────────────────
+PART 2: EloquentBookingRepository — method by method
+──────────────────────────────────────────────
+
+// findById(int $id): ?Booking
+// Use Booking::find($id) — returns null if not found (correct return type)
+// Do NOT use findOrFail() — that throws an exception instead of returning null
+// The caller decides what to do when null is returned
+
+// findBySchool(int $schoolId, array $filters = []): Collection
+// Start a query: $query = Booking::where('school_id', $schoolId)
+// Apply filters conditionally using when():
+//   $query->when(isset($filters['status']), fn($q) => $q->where('status', $filters['status']))
+//   $query->when(isset($filters['date_from']), fn($q) => $q->whereDate('created_at', '>=', $filters['date_from']))
+//   $query->when(isset($filters['date_to']), fn($q) => $q->whereDate('created_at', '<=', $filters['date_to']))
+// Return $query->get()
+// when() is preferred over if() chains — it keeps the query builder chain fluent
+
+// create(array $data): Booking
+// Booking::create($data) — returns the created model with id and timestamps
+// Ensure the $data keys match $fillable on the Booking model
+
+// update(int $id, array $data): Booking
+// Find the booking: $booking = Booking::findOrFail($id) — throw 404 if missing
+// Call $booking->update($data)
+// Return $booking->fresh() to get the updated model from DB (not the stale in-memory instance)
+// fresh() performs a new SELECT — ensures returned data reflects DB state
+
+// delete(int $id): bool
+// Find the booking: $booking = Booking::findOrFail($id)
+// Call $booking->delete() — triggers soft-delete because the model uses SoftDeletes
+// Returns bool (true on success)
+// The record gets a deleted_at timestamp, not removed from the table
+
+// getPaginatedWithFilters(array $filters, int $perPage = 15): LengthAwarePaginator
+// Start base query: $query = Booking::query()
+// Apply each filter with when():
+//   school_id → where('school_id', ...)
+//   trip_id → where('trip_id', ...)
+//   status → where('status', ...)
+//   search (contact_email LIKE) → where('contact_email', 'like', '%' . $filters['search'] . '%')
+// Return $query->paginate($perPage)
+// paginate() returns LengthAwarePaginator with total count, current page, links
+
+──────────────────────────────────────────────
+PART 3: AppServiceProvider — binding interface to implementation
+──────────────────────────────────────────────
+
+// In the register() method of AppServiceProvider:
+// $this->app->bind(
+//     BookingRepositoryInterface::class,
+//     EloquentBookingRepository::class
+// )
+
+// What bind() does:
+// Every time Laravel resolves BookingRepositoryInterface from the container,
+// it instantiates EloquentBookingRepository instead
+// This is called a "contextual binding" resolution
+
+// For tests, override this binding:
+// In a test's setUp() or in a TestCase base class:
+// $this->app->bind(BookingRepositoryInterface::class, InMemoryBookingRepository::class)
+// All subsequent container resolutions during that test will use the in-memory version
+
+// Why bind() not singleton()?
+// singleton() reuses one instance across all container resolutions in the request lifecycle
+// bind() creates a new instance each time — safer default for repositories
+// Use singleton() only if you need shared state (e.g., a cache) — not appropriate here
+
+──────────────────────────────────────────────
+PART 4: Constructor injection in BookingController
+──────────────────────────────────────────────
+
+// Type-hint the interface in the constructor:
+// public function __construct(private BookingRepositoryInterface $bookingRepository) {}
+
+// Laravel sees the BookingRepositoryInterface type-hint, checks the container bindings,
+// and injects the bound EloquentBookingRepository automatically
+
+// Key rule: NEVER instantiate the repository directly in controller code
+// new EloquentBookingRepository() bypasses the container — breaks the whole point
+// — Testability is lost (can't swap in InMemoryBookingRepository)
+// — Binding in AppServiceProvider is ignored
+
+──────────────────────────────────────────────
+PART 5: InMemoryBookingRepository — approach
+──────────────────────────────────────────────
+
+// Uses a plain PHP array as the data store: private array $bookings = []
+// A static counter simulates auto-incrementing IDs: private static int $nextId = 1
+
+// findById: iterate $this->bookings and find matching id, return null if not found
+
+// create: build an array representation of a Booking with an assigned id,
+//         append to $this->bookings, return a hydrated Booking model (or a DTO)
+
+// delete: filter out the entry with matching id, return true
+
+// Filters in findBySchool: array_filter() with closures matching the filter conditions
+
+// Pagination simulation: array_slice() with offset/limit, wrap in LengthAwarePaginator
+// new LengthAwarePaginator($items, $total, $perPage, $currentPage)
+
+// The key constraint: zero Eloquent imports in this class
+// Use new Booking() with $booking->setRawAttributes([...]) to hydrate a model
+// if the interface requires returning a Booking model instance
+// Or return a Booking-like object that satisfies type hints
+
+──────────────────────────────────────────────
+PART 6: when() vs if() chains in query building
+──────────────────────────────────────────────
+
+// Both work — when() is more idiomatic in Laravel
+
+// if() chain approach:
+// $query = Booking::query()
+// if (isset($filters['status'])) { $query->where('status', $filters['status']) }
+// if (isset($filters['school_id'])) { $query->where('school_id', ...) }
+// return $query->get()
+
+// when() approach:
+// Booking::query()
+//     ->when($filters['status'] ?? null, fn($q, $v) => $q->where('status', $v))
+//     ->when($filters['school_id'] ?? null, fn($q, $v) => $q->where('school_id', $v))
+//     ->get()
+
+// when() keeps the query builder chain unbroken — reads more like a specification
+// The condition (first arg) is evaluated; if truthy, the closure runs
+// The closure receives ($query, $value) — $value is the first arg passed in

@@ -1,0 +1,141 @@
+// SOLUTION 01 — Bug Identification and Analysis
+// ===============================================
+// Walk through each bug systematically before touching any code.
+// Understanding "why" prevents reintroducing the same class of bug.
+
+// ---------------------------------------------------------------
+// BUG A — public $tries = 10
+// ---------------------------------------------------------------
+
+// What it is:
+//   The job will be attempted 10 times before it is moved to failed_jobs.
+//   With no backoff configured, all 10 retries happen in rapid succession.
+
+// Why it is a bug:
+//   - 847 jobs × 10 attempts = up to 8,470 queue worker cycles wasted
+//     on jobs that will never succeed until the underlying code is fixed.
+//   - Without backoff, retries hammer the same broken code path
+//     with zero cooling-off time.
+//   - In Laravel, $tries counts the TOTAL attempts including the first one.
+//     So $tries = 10 means 9 retries after the original attempt.
+//   - The convention is $tries = 3 (two retries) unless there is a specific
+//     reason for more — and even then, always pair with $backoff.
+
+// Fix:
+//   Set $tries = 3 and add $backoff = [30, 60, 120].
+//   This means: first retry after 30s, second after 60s, third after 120s.
+//   Exponential backoff is critical for transient errors (network, lock contention).
+
+// ---------------------------------------------------------------
+// BUG B — private Closure $onSuccess stored in the constructor
+// ---------------------------------------------------------------
+
+// What it is:
+//   A PHP Closure (anonymous function) is stored as a property on the job.
+//   When Laravel serializes the job to push it onto the queue (Redis/database),
+//   it calls serialize() on the job object — and PHP cannot serialize a Closure.
+//   This produces the error: "Serialization of 'Closure' is not allowed".
+
+// Why it is a bug:
+//   Queue jobs are serialized and stored as strings in the queue backend.
+//   Only plain PHP values, primitives, and Eloquent models (via SerializesModels)
+//   can be stored. Closures, resources, and PDO connections cannot be serialized.
+
+// Fix:
+//   Remove the $onSuccess parameter entirely.
+//   Any post-confirmation logic should be handled via:
+//     Option 1 — Laravel events: fire a BookingConfirmed event inside handle()
+//                and register listeners in EventServiceProvider.
+//     Option 2 — Chain another job: $job->chain([new SendFollowUpJob(...)]).
+//     Option 3 — Call the logic directly inside handle() if it is simple.
+//   Never pass closures, anonymous classes, or any non-serializable values
+//   to a job constructor.
+
+// ---------------------------------------------------------------
+// BUG C — $this->booking->sendConfirmation() — method no longer exists
+// ---------------------------------------------------------------
+
+// What it is:
+//   The deployment yesterday renamed Booking::sendConfirmation()
+//   to Booking::dispatchConfirmationNotification().
+//   The job was not updated to match, so every attempt throws:
+//   "Call to undefined method App\Models\Booking::sendConfirmation()"
+
+// Why it is a bug:
+//   The job was deployed without updating its reference to the renamed method.
+//   This is the root cause of the production incident — all 847 failures trace
+//   back to this single rename not being propagated.
+
+// How to confirm before fixing:
+//   Run: git log --all --oneline -- app/Models/Booking.php
+//   Then: git diff HEAD~1 app/Models/Booking.php
+//   This will show exactly what changed in yesterday's deploy.
+
+// Fix:
+//   Replace $this->booking->sendConfirmation()
+//   with   $this->booking->dispatchConfirmationNotification()
+//   Then run: php artisan queue:restart to reload the worker with new code.
+
+// ---------------------------------------------------------------
+// BUG D — $user = User::find($id) with no null check
+// ---------------------------------------------------------------
+
+// What it is:
+//   User::find() returns null if no record is found.
+//   The next line does $user->email — dereferencing null.
+//   This produces: "Trying to get property 'email' of non-object".
+
+// Why it is a bug:
+//   Some bookings in the queue belong to users that have since been
+//   soft-deleted or hard-deleted. find() silently returns null for
+//   both cases (for soft-deletes, you need withTrashed() to find them).
+
+// Fix — Option 1 (throw, let job retry or fail):
+//   Use User::findOrFail($this->booking->user_id)
+//   This throws ModelNotFoundException, which causes the job to fail
+//   and eventually land in failed_jobs with a clear error message.
+
+// Fix — Option 2 (handle gracefully, delete job):
+//   $user = User::withTrashed()->find($this->booking->user_id);
+//   if (! $user) {
+//       // User is gone — no point retrying, discard the job cleanly.
+//       $this->delete();
+//       Log::warning("Booking confirmation skipped — user deleted", [...]);
+//       return;
+//   }
+//   This is the better approach when a missing user is an expected edge case.
+
+// ---------------------------------------------------------------
+// BUG E — failed() method does nothing
+// ---------------------------------------------------------------
+
+// What it is:
+//   The failed() method exists but has an empty body.
+//   When all retries are exhausted, the job moves to failed_jobs silently.
+//   No one is alerted. No log entry is written. The failure is invisible.
+
+// Why it is a bug:
+//   The Tripz team only discovered 847 failures because of a separate alert.
+//   Without a failed() implementation, a runaway failure event could go
+//   unnoticed for hours or days.
+
+// Fix:
+//   Inside failed(\Throwable $exception), at minimum:
+//     Log::error("BookingConfirmation permanently failed", [
+//         'booking_id' => $this->booking->id,
+//         'error'      => $exception->getMessage(),
+//     ]);
+//   Ideally also:
+//     Send a Slack notification or email to the dev/ops team.
+//     Mark the Booking model with a status flag (e.g. confirmation_status = 'failed')
+//     so support staff can see it in the admin panel and act manually.
+
+// ---------------------------------------------------------------
+// SUMMARY TABLE
+// ---------------------------------------------------------------
+
+// Bug A — $tries = 10              → set to 3, add $backoff = [30, 60, 120]
+// Bug B — Closure in constructor   → remove it, use events or direct method calls
+// Bug C — sendConfirmation() gone  → update to dispatchConfirmationNotification()
+// Bug D — no null check on User    → use findOrFail or explicit null guard
+// Bug E — failed() is empty        → log + notify admin + mark booking record

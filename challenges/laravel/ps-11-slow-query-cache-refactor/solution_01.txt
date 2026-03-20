@@ -1,0 +1,170 @@
+// SOLUTION 01 — Slow Query Cache Refactor: Cache::remember() Pattern
+// Topic: Adding a caching layer to an expensive dashboard query
+// Approach: Cache::remember() with per-stat TTLs and clear key naming
+
+// ============================================================
+// THE CORE PATTERN: Cache::remember()
+// ============================================================
+
+// Cache::remember($key, $ttl, $callback) does three things:
+//   1. Checks if a value exists under $key in the cache store
+//   2. If it exists and has not expired, returns the cached value (0 DB queries)
+//   3. If it does not exist or has expired, runs $callback, stores the result, returns it
+//
+// This is the cache-aside pattern (also called lazy loading):
+//   Read: check cache → cache miss → hit database → store in cache → return
+//   Read: check cache → cache hit → return (no database involved)
+//
+// TTL can be an integer (seconds) or a DateInterval:
+//   300      → 5 minutes (300 seconds)
+//   3600     → 1 hour
+//   now()->addMinutes(5)  → same as 300 but more readable
+//   now()->addHour()      → same as 3600
+
+// ============================================================
+// CACHE KEY NAMING STRATEGY
+// ============================================================
+
+// Good cache keys are:
+//   - Namespaced to avoid collisions across apps/features
+//   - Descriptive enough to know what they store
+//   - Scoped with dynamic parts where the value changes (e.g., year/month)
+//
+// Pattern for Tripz: tripz:dashboard:{stat_name}
+//
+// Examples:
+//   tripz:dashboard:total_bookings
+//   tripz:dashboard:pending_bookings
+//   tripz:dashboard:top_destinations
+//   tripz:dashboard:monthly_chart:2024   ← year scoped so 2023 and 2024 are separate
+//
+// To avoid hardcoded 'tripz' prefix, derive from config:
+//   $prefix = strtolower(config('app.name'));
+//   $key = "{$prefix}:dashboard:total_bookings";
+
+// ============================================================
+// TTL DECISIONS — WHY EACH STAT HAS A DIFFERENT TTL
+// ============================================================
+
+// 5 MINUTES (300 seconds) — stats that reflect current operational state:
+//
+//   pending_bookings:
+//     Schools submit bookings throughout the day
+//     Admins need near-real-time visibility to process bookings
+//     A 5-minute delay is acceptable for a count, not for a list
+//
+//   confirmed_bookings:
+//     Admins are actively confirming bookings — this changes frequently
+//     A stale confirmed count could mislead admins about workload
+//
+//   total_revenue:
+//     Financial metric — admins care about this but can tolerate a short delay
+//     5 minutes is a safe balance between performance and freshness
+//
+//   total_bookings:
+//     General count — changes whenever any booking is created
+//     5 minutes prevents hammering COUNT(*) on every page load
+//
+//   bookings_this_month:
+//     Current-month data is still being written throughout the month
+//     Short TTL keeps it reasonably current
+
+// 1 HOUR (3600 seconds) — stats that change slowly or reflect historical data:
+//
+//   monthly_chart:
+//     Aggregates bookings by month for the current year
+//     Past months are completely historical — their values will NEVER change
+//     Only the current month's data is still being written
+//     Even the current month's data barely changes minute-to-minute at Tripz's scale
+//     1 hour is very safe here
+//
+//   top_destinations:
+//     Trip ranking by booking count — shifts over days/weeks, not minutes
+//     A trip unlikely to move from #1 to #5 within an hour
+//     1 hour is appropriate
+//
+//   schools_by_bookings:
+//     School activity ranking — changes even more slowly than trip rankings
+//     1 hour is conservative; you could justify 4-6 hours
+
+// ============================================================
+// STAT THAT SHOULD NOT BE CACHED (OR NEEDS VERY SHORT TTL)
+// ============================================================
+
+// If any stat in the dashboard represents something user-specific or
+// security-sensitive (e.g., "bookings pending MY approval"), it must NOT
+// be cached in a shared cache key — cached data would leak across users
+//
+// The stats above are all aggregate counts for admin use only
+// Since only admins see the dashboard, the same cache entry is valid for all admins
+// This is safe to cache globally (not per-user)
+//
+// If Tripz adds school-specific stats to the dashboard later, those MUST be
+// keyed per-school: tripz:dashboard:school:{schoolId}:pending_bookings
+
+// ============================================================
+// REFACTORED CONTROLLER STRUCTURE
+// ============================================================
+
+// The refactored index() method has this shape:
+//
+//   Get each stat value using Cache::remember() with appropriate key and TTL
+//   Build the $stats array from the cached values
+//   Return response()->json($stats) as before
+//
+// The controller method length increases (more lines), but each line is readable
+// Every stat should have a brief comment explaining its TTL choice
+// This is acceptable in a controller — the comments serve as living documentation
+
+// ============================================================
+// EXTRACTING TO A SERVICE CLASS (RECOMMENDED)
+// ============================================================
+
+// Once cache logic is added, the controller grows significantly
+// Consider extracting to a DashboardService:
+//
+//   class DashboardService
+//   {
+//       public function getStats(): array
+//       {
+//           return [
+//               'total_bookings'  => $this->getTotalBookings(),
+//               'pending_bookings'=> $this->getPendingBookings(),
+//               ...
+//           ];
+//       }
+//
+//       private function getTotalBookings(): int
+//       {
+//           return Cache::remember('tripz:dashboard:total_bookings', 300,
+//               fn() => Booking::count()
+//           );
+//       }
+//   }
+//
+// The controller then becomes a single-line call:
+//   return response()->json($this->dashboardService->getStats());
+//
+// Benefits:
+//   - Controller stays thin
+//   - DashboardService can be unit tested without HTTP overhead
+//   - Cache keys and TTLs are defined in one place, easy to update
+
+// ============================================================
+// CACHE INVALIDATION — BASICS
+// ============================================================
+
+// Cache::remember() with a TTL means data eventually expires on its own
+// But if an admin creates a booking, they should not wait 5 minutes to see it
+//
+// Basic invalidation: forget the cache key when related data changes
+//   Cache::forget('tripz:dashboard:total_bookings');
+//   Cache::forget('tripz:dashboard:pending_bookings');
+//
+// Where to call this:
+//   In a BookingObserver's created(), updated(), deleted() methods
+//   The observer runs after every Booking write operation
+//   It clears only the relevant keys — monthly_chart does not need to be cleared
+//   on every booking update (only when the month/year changes, which is rare)
+//
+// This ensures the next dashboard request re-queries the database freshly

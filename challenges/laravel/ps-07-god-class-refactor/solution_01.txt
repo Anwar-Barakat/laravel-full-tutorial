@@ -1,0 +1,150 @@
+SOLUTION 01 — FormRequest, Action Pattern, and Constructor Injection
+====================================================================
+Focus: Where each piece of logic belongs and how the layers connect
+
+This file contains PHP comment skeletons only. No executable code.
+
+──────────────────────────────────────────────
+PART 1: CreateBookingRequest (FormRequest)
+──────────────────────────────────────────────
+
+// Extend Illuminate\Foundation\Http\Requests\FormRequest
+// Two methods to implement: authorize() and rules()
+
+// authorize() — return true/false based on the authenticated user
+// Check $this->user()->role to allow only 'admin' and 'school_admin'
+// If false, Laravel automatically returns 403 — no controller code needed
+// This replaces $this->authorize() in the controller
+
+// rules() — return the validation array
+// Move the exact rules from the controller's $request->validate([...]) here
+// trip_id, school_id, student_count, contact_email — same rules, just a different home
+// When Laravel resolves CreateBookingRequest, it runs authorize() and rules() automatically
+// If validation fails, 422 is returned before store() is ever called
+
+// Why FormRequest?
+// — Keeps the controller free of validation noise
+// — authorize() and validation are co-located (both are "is this request allowed?")
+// — Can add custom messages(), attributes(), or prepareForValidation() methods
+// — The request object is reusable — if a CLI command calls the service directly,
+//   it constructs its own data array and bypasses the FormRequest entirely
+
+──────────────────────────────────────────────
+PART 2: CreateBookingAction
+──────────────────────────────────────────────
+
+// Single public method: execute(array $data): Booking
+// (some teams use __invoke — either is fine, __invoke is shorter but less explicit)
+
+// Responsibility: create ONE booking record — nothing else
+// No mail, no notifications, no events, no logging in this class
+
+// Step 1 — capacity check
+// Find the Trip by $data['trip_id']
+// Sum existing non-cancelled student_count for that trip
+// If sum + $data['student_count'] > $trip->max_capacity:
+//     throw new BookingCapacityException('Trip is fully booked')
+//     This is a domain exception — defined in app/Exceptions/
+
+// Step 2 — generate reference
+// 'TRP-' . strtoupper(Str::random(8))
+// This belongs in the Action (not the model) because:
+//   - It is part of the booking creation business rule, not a database concern
+//   - It can be swapped or tested without touching the Booking model
+//   - The model should stay passive — it should not "know" the reference format
+
+// Step 3 — create and return the Booking
+// Booking::create([...$data, 'status' => 'pending', 'reference' => $reference])
+// Return the created model
+
+// Why "Action" not "Service"?
+// — An Action does ONE thing: execute a single use case step
+// — It has no dependencies on other Actions, no side effects
+// — Perfectly isolated → perfectly testable
+// — BookingService (next section) orchestrates multiple Actions + side effects
+
+──────────────────────────────────────────────
+PART 3: BookingService
+──────────────────────────────────────────────
+
+// Constructor injection: accept CreateBookingAction via __construct
+// This allows tests to swap a mock action without modifying the service
+
+// create(array $data): Booking — orchestration method
+// Step 1 — call $this->action->execute($data)
+//           let BookingCapacityException propagate up to the controller
+// Step 2 — send confirmation email
+//           Mail::to($data['contact_email'])->send(new BookingConfirmationMail($booking))
+// Step 3 — notify admins
+//           collect admins, foreach → $admin->notify(new NewBookingNotification($booking))
+// Step 4 — fire event
+//           event(new BookingCreated($booking))
+// Step 5 — log
+//           Log::info('Booking created', [...])
+// Step 6 — return the booking
+
+// Why side effects here and not in the Action?
+// — The Action is pure: given data → return model (like a function)
+// — Side effects (mail, notify, event) can be changed independently of the creation logic
+// — In tests, you can mock the Action and test that the Service fires the right events
+//   without actually touching the database
+
+// Why fire an event (BookingCreated) instead of calling mail/notify directly?
+// See solution_02.txt for the full explanation
+
+──────────────────────────────────────────────
+PART 4: BookingController::store()
+──────────────────────────────────────────────
+
+// Constructor: inject BookingService
+// store() receives CreateBookingRequest (not Request)
+
+// The method should:
+// 1. Call $this->bookingService->create($request->validated())
+// 2. Catch BookingCapacityException → return 422 JSON response
+// 3. Return new BookingResource($booking) with 201 status
+
+// That's 3-5 lines — no validation logic, no capacity check, no email calls
+// The controller's only job: accept HTTP input, call service, return HTTP output
+
+// $request->validated() — returns only the fields that passed the FormRequest rules
+// Safe to pass directly to the service — no raw input leaks through
+
+──────────────────────────────────────────────
+PART 5: Constructor injection — the wiring
+──────────────────────────────────────────────
+
+// Laravel's service container automatically resolves constructor dependencies
+// If BookingService type-hints CreateBookingAction in its constructor,
+// and BookingController type-hints BookingService in its constructor,
+// Laravel injects the concrete instances automatically — no manual wiring needed
+// (as long as you bind interfaces if you use them — see folder 08)
+
+// This is called "automatic resolution" or "autowiring"
+// Works for concrete classes out of the box
+// For interfaces: register a binding in AppServiceProvider first
+
+──────────────────────────────────────────────
+PART 6: What does NOT belong in each layer
+──────────────────────────────────────────────
+
+// Controller — do NOT put:
+// — Validation rules (→ FormRequest)
+// — Capacity checks (→ Action)
+// — Mail/notifications (→ Service)
+// — Direct Eloquent queries (→ Service or Action)
+
+// Action — do NOT put:
+// — Side effects: mail, events, notifications, logging
+// — Multiple unrelated operations (one Action = one use case step)
+// — HTTP concepts: Request, Response, redirect()
+
+// Service — do NOT put:
+// — HTTP concepts: Request, response(), redirect()
+// — View rendering
+// — Route logic
+
+// FormRequest — do NOT put:
+// — Business logic (capacity check is NOT validation)
+// — DB writes
+// — Side effects

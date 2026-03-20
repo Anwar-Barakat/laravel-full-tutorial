@@ -1,0 +1,185 @@
+// SOLUTION 01 — Feature Test Suite: Happy Path Coverage
+// Topic: Writing PHPUnit feature tests for the Tripz booking API
+// Approach: Cover all endpoints with happy-path tests and the most common failure codes
+
+// ============================================================
+// FILE LOCATION
+// ============================================================
+// tests/Feature/BookingApiTest.php
+
+// ============================================================
+// CLASS SETUP
+// ============================================================
+
+// Extend TestCase (not the unit TestCase — the full Laravel TestCase)
+// Use the RefreshDatabase trait so every test gets a clean database state
+// Import User, Trip, School, Booking models for factory use
+
+// ============================================================
+// AUTHENTICATION APPROACH
+// ============================================================
+
+// Use actingAs($user, 'sanctum') to simulate authenticated API requests
+// The second argument 'sanctum' tells Laravel which guard to use
+// Without this, requests hit the auth middleware and return 401
+
+// Example pattern:
+// $user = User::factory()->create(['role' => 'school_admin']);
+// $response = $this->actingAs($user, 'sanctum')->postJson('/api/bookings', [...]);
+
+// ============================================================
+// FACTORY SETUP NEEDED
+// ============================================================
+
+// UserFactory — must support a 'role' field (school_admin, admin, student)
+// SchoolFactory — basic school record
+// TripFactory — must have a 'capacity' field and belong to a school
+// BookingFactory — must belong to a user, school, and trip
+
+// ============================================================
+// TEST 1 — POST /api/bookings: school_admin can create a booking (201)
+// ============================================================
+
+// Create a school_admin user
+// Create a school and associate the user with it
+// Create a trip with enough capacity
+// Build the booking payload: trip_id, school_id, student_count, contact_email
+// Call actingAs($schoolAdmin, 'sanctum')->postJson('/api/bookings', $payload)
+// Assert status is 201
+// Assert JSON structure contains: data.id, data.trip_id, data.status, data.total_price
+// Assert data.status === 'pending' (default status for new bookings)
+
+// ============================================================
+// TEST 2 — POST /api/bookings: unauthenticated returns 401
+// ============================================================
+
+// Do NOT call actingAs — send request with no authentication
+// Call postJson('/api/bookings', $payload)
+// Assert status is 401
+// No need to assert body structure — just the status code is sufficient
+
+// ============================================================
+// TEST 3 — POST /api/bookings: student role returns 403
+// ============================================================
+
+// Create a user with role 'student'
+// Call actingAs($student, 'sanctum')->postJson('/api/bookings', $payload)
+// Assert status is 403
+// The auth middleware allows the request through (token is valid)
+// But the authorization policy/gate rejects the action (wrong role)
+
+// ============================================================
+// TEST 4 — POST /api/bookings: missing fields return 422
+// ============================================================
+
+// Create a school_admin user
+// Call postJson('/api/bookings', []) with an empty payload
+// Assert status is 422
+// Assert JSON structure contains an 'errors' key
+// Optionally assert that specific field errors are present:
+//   assertJsonValidationErrors(['trip_id', 'school_id', 'student_count'])
+
+// ============================================================
+// TEST 5 — POST /api/bookings: capacity exceeded returns 422
+// ============================================================
+
+// Create a trip with capacity = 20
+// Create an existing booking for that trip with student_count = 20 (fills it)
+// Attempt to create another booking for the same trip
+// Assert status is 422
+// This tests the business rule validation in the controller/form request
+
+// ============================================================
+// TEST 6 — GET /api/bookings: school_admin sees only own school
+// ============================================================
+
+// Create two schools
+// Create a school_admin for school A
+// Create 2 bookings for school A, 3 bookings for school B
+// Call actingAs($schoolAdminA, 'sanctum')->getJson('/api/bookings')
+// Assert status is 200
+// Assert that the response contains exactly 2 bookings (not 5)
+// Use assertJsonCount(2, 'data') to check the count in the response
+
+// ============================================================
+// TEST 7 — GET /api/bookings: admin sees all bookings
+// ============================================================
+
+// Create an admin user
+// Create bookings across multiple schools (e.g., 5 total)
+// Call actingAs($admin, 'sanctum')->getJson('/api/bookings')
+// Assert status is 200
+// Assert that all 5 bookings appear in the response
+
+// ============================================================
+// TEST 8 — GET /api/bookings: unauthenticated returns 401
+// ============================================================
+
+// Call getJson('/api/bookings') with no authentication
+// Assert status is 401
+
+// ============================================================
+// TEST 9 — GET /api/bookings/{id}: school_admin views own booking (200)
+// ============================================================
+
+// Create school_admin and a booking belonging to their school
+// Call actingAs($schoolAdmin, 'sanctum')->getJson('/api/bookings/' . $booking->id)
+// Assert status is 200
+// Assert JSON structure matches the expected booking shape
+
+// ============================================================
+// TEST 10 — GET /api/bookings/{id}: school_admin cannot view another school's booking (403)
+// ============================================================
+
+// Create two school_admins, each with their own school and booking
+// Call actingAs($schoolAdminA, 'sanctum')->getJson('/api/bookings/' . $bookingB->id)
+// Assert status is 403
+// The policy check should deny access to another school's booking
+
+// ============================================================
+// TEST 11 — PATCH /api/bookings/{id}: admin can update status (200)
+// ============================================================
+
+// Create an admin user
+// Create an existing booking with status 'pending'
+// Call actingAs($admin, 'sanctum')->patchJson('/api/bookings/' . $booking->id, ['status' => 'confirmed'])
+// Assert status is 200
+// Assert the returned data shows status = 'confirmed'
+// Optionally: assertDatabaseHas('bookings', ['id' => $booking->id, 'status' => 'confirmed'])
+
+// ============================================================
+// TEST 12 — PATCH /api/bookings/{id}: school_admin cannot update status (403)
+// ============================================================
+
+// Create a school_admin
+// Attempt to patch a booking status
+// Assert status is 403
+
+// ============================================================
+// TEST 13 — DELETE /api/bookings/{id}: admin can delete booking (204)
+// ============================================================
+
+// Create an admin user and a booking
+// Call actingAs($admin, 'sanctum')->deleteJson('/api/bookings/' . $booking->id)
+// Assert status is 204
+// Assert the record no longer exists: assertDatabaseMissing('bookings', ['id' => $booking->id])
+
+// ============================================================
+// TEST 14 — DELETE /api/bookings/{id}: non-existent booking returns 404
+// ============================================================
+
+// Create an admin user
+// Attempt to delete a booking with an ID that does not exist (e.g., 99999)
+// Assert status is 404
+
+// ============================================================
+// ASSERTION HELPERS USED IN THIS SOLUTION
+// ============================================================
+
+// $response->assertStatus(201)      — check HTTP status code
+// $response->assertJsonStructure([  — check response shape
+//     'data' => ['id', 'trip_id', 'status', 'total_price']
+// ])
+// $response->assertJsonCount(2, 'data')  — count items in a JSON array
+// $this->assertDatabaseHas('bookings', ['id' => 1, 'status' => 'confirmed'])
+// $this->assertDatabaseMissing('bookings', ['id' => 1])

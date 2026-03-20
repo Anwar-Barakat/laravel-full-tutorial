@@ -1,0 +1,118 @@
+// SOLUTION 02 — Priority Ranking, Fixed Routes, and Defence-in-Depth
+// ====================================================================
+
+// ---------------------------------------------------------------
+// PART 1 — Priority ranking (most to least critical)
+// ---------------------------------------------------------------
+
+// Rank 1 — Path traversal in exportData() [Vulnerability 6]
+//   Why first: No authentication required + user controls the full file path.
+//   An unauthenticated attacker can download .env in a single HTTP request.
+//   Once APP_KEY is exposed, all encrypted values (passwords, tokens) are
+//   compromised. This is a complete application takeover vector.
+//   Fix this before the branch is tested on any environment with real secrets.
+
+// Rank 2 — Unrestricted file upload + path traversal in uploadLogo() [Vulns 3 & 4]
+//   Why second: Uploading a PHP file to public/ and executing it is Remote
+//   Code Execution (RCE). Combined with no authentication, any visitor can
+//   do this. Two bugs compound into the worst possible outcome.
+
+// Rank 3 — SQL Injection in search() [Vulnerability 1]
+//   Why third: Unauthenticated, directly exploitable, can exfiltrate any table.
+//   On a write-capable DB user it can also modify or delete data.
+//   Slightly below RCE in ranking only because DB access != OS-level shell.
+
+// Rank 4 — Missing authentication on all routes [Vulnerability 8]
+//   Why fourth: This is the root enabler of ranks 1-3. Every destructive
+//   operation is open to the internet. Fixing auth alone would have contained
+//   most of the damage even if the other bugs remained.
+
+// Rank 5 — Mass assignment in update() [Vulnerability 2]
+//   Why fifth: Requires a logged-in user (once auth is added), but still
+//   allows privilege escalation. Critical in authenticated context.
+
+// Rank 6 — IDOR in getBookings() [Vulnerability 5]
+//   Why sixth: Data disclosure, privacy violation, potential GDPR breach.
+//   Requires a logged-in user but any user can see any school's data.
+
+// Rank 7 — SELECT * data leakage in search() [Vulnerability 7]
+//   Why seventh: Information disclosure that aids other attacks but is
+//   not directly exploitable on its own.
+
+// Rank 8 — Missing column selection in search (tied with 7 conceptually)
+//   This is folded into Vulnerability 7 — both are the same method.
+
+// ---------------------------------------------------------------
+// PART 2 — Description of the corrected routes/api.php
+// ---------------------------------------------------------------
+
+// Public routes (unauthenticated, but rate-limited):
+//   GET /schools/search — throttle to 30 requests per minute to prevent
+//   scraping and brute-force enumeration. Use ->middleware('throttle:30,1').
+
+// Authenticated routes — require auth:sanctum for all of the below.
+// Group them under Route::middleware(['auth:sanctum']).
+
+// PUT /schools/{school}
+//   Add ->middleware('can:update,school') so Laravel calls the
+//   SchoolPolicy::update() method which checks:
+//     $user->id === $school->admin_user_id  (school admin editing their own)
+//     OR $user->hasRole('tripz-admin')       (super admin)
+
+// POST /schools/{school}/logo
+//   Same policy middleware: ->middleware('can:update,school')
+//   The controller also needs Request::validate() before touching the file.
+
+// GET /schools/{school_id}/bookings
+//   Bind to a School model for type safety: route model binding.
+//   Use ->middleware('can:viewBookings,school') tied to SchoolPolicy.
+
+// GET /admin/export
+//   Two middleware layers:
+//     auth:sanctum (must be logged in)
+//     can:access-admin (must have the tripz-admin role)
+//   Inside the controller, map the 'report' param to a hardcoded file path —
+//   never pass user input to storage_path() directly.
+
+// ---------------------------------------------------------------
+// PART 3 — Defence-in-depth checklist
+// ---------------------------------------------------------------
+
+// Beyond fixing the specific bugs, a production Tripz API should have:
+
+// 1. Global rate limiting
+//    Set a default throttle middleware on all API routes in RouteServiceProvider
+//    or in bootstrap/app.php (Laravel 11+).
+//    This mitigates brute force, scraping, and DDoS amplification.
+
+// 2. API Resources for all JSON responses
+//    Define SchoolResource, BookingResource, etc.
+//    These act as an allow-list for which fields are serialised.
+//    A new database column is never accidentally exposed.
+
+// 3. FormRequest classes for all mutating endpoints
+//    Move validation out of controllers into dedicated Request classes.
+//    Use $request->validated() everywhere — never $request->all() or $request->input().
+
+// 4. File storage policy
+//    Never store user-uploaded files in public_path().
+//    All user files go to a private S3 bucket or storage/app/private.
+//    Serve them through a controller that checks authorisation first,
+//    then streams the file using Storage::download() or a signed URL.
+
+// 5. Content Security Policy headers
+//    Add X-Content-Type-Options: nosniff to prevent MIME-type sniffing.
+//    This reduces the damage of uploaded files even if the other fixes are missed.
+//    Use the spatie/laravel-csp package or set headers in middleware.
+
+// 6. Automated security scanning in CI
+//    Run enlightn/enlightn or equivalent on every PR:
+//      composer require enlightn/enlightn --dev
+//      php artisan enlightn
+//    This catches common Laravel misconfigurations including many of the above.
+//    Add it as a required CI check so no PR can merge with HIGH severity findings.
+
+// 7. Sanctum token scopes (optional but recommended)
+//    Define scopes like 'school:write', 'admin:export' on Sanctum tokens.
+//    Check $request->user()->tokenCan('admin:export') before exportData().
+//    This gives fine-grained per-token permissions on top of role checks.

@@ -1,0 +1,186 @@
+// SOLUTION 02 — Feature Test Suite: Edge Cases and Advanced Assertions
+// Topic: Writing PHPUnit feature tests for the Tripz booking API
+// Approach: Edge cases, factory states, precise JSON assertions, database assertions
+
+// ============================================================
+// FACTORY STATES FOR CLEAN TEST SETUP
+// ============================================================
+
+// Instead of manually setting roles every time, define factory states:
+//
+// UserFactory:
+//   ->admin()        — sets role to 'admin'
+//   ->schoolAdmin()  — sets role to 'school_admin'
+//   ->student()      — sets role to 'student'
+//
+// Usage:
+//   $admin = User::factory()->admin()->create()
+//   $schoolAdmin = User::factory()->schoolAdmin()->create()
+//
+// TripFactory:
+//   ->full()  — sets the trip's current_bookings to match its capacity
+//   ->withCapacity(50) — sets capacity to a specific value
+
+// ============================================================
+// TEST NAMING CONVENTION
+// ============================================================
+
+// Use the snake_case method naming convention that reads like a sentence:
+//   test_school_admin_cannot_create_booking_for_another_school
+//   test_admin_can_see_all_bookings_across_all_schools
+//   test_unauthenticated_user_receives_401_on_list_endpoint
+//
+// This makes PHPUnit output readable without any docblock comments
+// PHPUnit converts underscores to spaces in the output
+
+// ============================================================
+// EDGE CASE: school_admin booking for a different school (403)
+// ============================================================
+
+// This is separate from the happy path test
+// Create school A and school B
+// Create school_admin for school A
+// Attempt to create a booking with school_id pointing to school B
+// Assert status is 403 (not 422 — it is an authorization error, not a validation error)
+// The policy must check that the authenticated user belongs to the school in the payload
+
+// ============================================================
+// EDGE CASE: capacity exceeded returns 422 with correct error message
+// ============================================================
+
+// Create a trip with capacity = 10
+// Use a factory to create an existing confirmed booking with student_count = 10
+// Attempt a new booking for the same trip with student_count = 1
+// Assert status is 422
+// Use assertJsonPath to check the exact error location:
+//   $response->assertJsonPath('errors.student_count.0', 'This trip has no remaining capacity')
+// assertJsonPath uses dot notation to navigate the JSON structure
+// This is more precise than assertJsonFragment which searches anywhere in the response
+
+// ============================================================
+// assertJsonFragment vs assertJsonPath — when to use each
+// ============================================================
+
+// assertJsonFragment(['status' => 'pending'])
+//   — passes if 'status: pending' appears ANYWHERE in the response
+//   — useful for checking a value exists without caring about location
+//   — can give false positives if the same key/value appears multiple times
+
+// assertJsonPath('data.status', 'pending')
+//   — checks the value at EXACTLY that dot-notation path
+//   — more precise, better for asserting specific fields in nested structures
+//   — use this for response body assertions when you know the exact path
+
+// ============================================================
+// DATABASE ASSERTIONS AFTER WRITE OPERATIONS
+// ============================================================
+
+// After a successful POST, confirm the record was actually saved:
+//   $this->assertDatabaseHas('bookings', [
+//       'trip_id'       => $trip->id,
+//       'school_id'     => $school->id,
+//       'student_count' => 25,
+//       'status'        => 'pending',
+//   ])
+//
+// After a successful DELETE, confirm the record is gone:
+//   $this->assertDatabaseMissing('bookings', ['id' => $booking->id])
+//
+// This tests persistence, not just the HTTP response
+// An API could return 200 without actually saving — database assertions catch that
+
+// ============================================================
+// TESTING ROLE-SCOPED LIST RESPONSES
+// ============================================================
+
+// For the school_admin list test, be precise about what "only sees own school" means:
+// Create school A with 2 bookings, school B with 3 bookings
+// Authenticate as school_admin of school A
+// Assert the response count is exactly 2
+// Also assert that none of the returned booking IDs belong to school B:
+//   Assert each booking in response has school_id === school A's ID
+//
+// Using assertJsonCount alone only checks the count
+// A school_admin seeing the wrong 2 bookings would still pass the count check
+// Add a loop or assertJsonMissing to verify the correct records are returned
+
+// ============================================================
+// TESTING SOFT DELETES (if applicable)
+// ============================================================
+
+// If Booking uses SoftDeletes, assertDatabaseMissing will still find the record
+// (because it queries without the deleted_at constraint)
+// Use assertSoftDeleted('bookings', ['id' => $booking->id]) instead
+// This confirms deleted_at is set rather than the row being physically removed
+
+// ============================================================
+// SHARED SETUP WITH setUp()
+// ============================================================
+
+// If many tests need the same base data (e.g., an admin user, a trip, a school),
+// create a setUp() method in the test class:
+//   protected function setUp(): void
+//   {
+//       parent::setUp();
+//       $this->admin = User::factory()->admin()->create();
+//       $this->school = School::factory()->create();
+//       $this->trip = Trip::factory()->withCapacity(50)->create();
+//   }
+//
+// This avoids repeating factory calls in every test
+// Be careful: setUp() runs before EVERY test, so it adds to total test time
+// Only put truly shared data here — test-specific data belongs in the test itself
+
+// ============================================================
+// TESTING PAGINATION
+// ============================================================
+
+// If GET /api/bookings returns paginated results, assert the meta structure:
+//   $response->assertJsonStructure([
+//       'data'  => [['id', 'status', 'total_price']],
+//       'links' => ['first', 'last', 'prev', 'next'],
+//       'meta'  => ['current_page', 'total', 'per_page'],
+//   ])
+// Create enough records to span multiple pages to test pagination behaviour
+
+// ============================================================
+// HANDLING TIMESTAMPS IN ASSERTIONS
+// ============================================================
+
+// When asserting created_at or updated_at in JSON responses, avoid asserting
+// the exact timestamp value — it changes every run
+// Instead assert the key exists:
+//   $response->assertJsonStructure(['data' => ['created_at']])
+// Or assert the format using a Carbon comparison if the model returns a formatted string
+
+// ============================================================
+// SUMMARY: COMPLETE COVERAGE CHECKLIST
+// ============================================================
+
+// POST /api/bookings:
+//   201 happy path
+//   401 unauthenticated
+//   403 wrong role (student)
+//   403 school_admin booking for another school
+//   422 missing fields
+//   422 capacity exceeded
+
+// GET /api/bookings:
+//   200 school_admin sees only own school's bookings
+//   200 admin sees all bookings
+//   401 unauthenticated
+
+// GET /api/bookings/{id}:
+//   200 school_admin views own booking
+//   403 school_admin views another school's booking
+//   404 booking does not exist
+
+// PATCH /api/bookings/{id}:
+//   200 admin updates status
+//   403 school_admin attempts update
+//   422 invalid status value
+
+// DELETE /api/bookings/{id}:
+//   204 admin deletes booking + assertDatabaseMissing
+//   403 school_admin attempts delete
+//   404 booking does not exist

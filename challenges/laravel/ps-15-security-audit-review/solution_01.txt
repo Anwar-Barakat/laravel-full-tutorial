@@ -1,0 +1,220 @@
+// SOLUTION 01 — Vulnerability Identification
+// ============================================
+// Eight vulnerabilities, each explained in full.
+// Severity is assessed using a rough OWASP CVSS lens
+// (Confidentiality / Integrity / Availability impact).
+
+// ---------------------------------------------------------------
+// VULNERABILITY 1 — SQL Injection in search()
+// ---------------------------------------------------------------
+
+// Location: search() method, the DB::select() call.
+
+// What is happening:
+//   $request->name is concatenated directly into a raw SQL string.
+//   There is no escaping, no binding, no sanitisation.
+
+// What an attacker can do:
+//   Supply a crafted name value such as:
+//     ' UNION SELECT id,email,password,NULL,NULL FROM users-- -
+//   This appends a second SELECT to the original query and returns
+//   user credentials alongside school results.
+//   More destructive: '; DROP TABLE schools;-- would delete the table
+//   (if the database user has DDL privileges).
+//   Even on read-only DB users, a UNION attack can exfiltrate any table.
+
+// Severity: CRITICAL — direct database read/write.
+
+// Fix:
+//   Use parameterised bindings with DB::select():
+//     DB::select("SELECT id, name, city FROM schools WHERE name LIKE ?", ["%{$term}%"])
+//   Or use Eloquent which parameterises automatically:
+//     School::where('name', 'like', "%{$term}%")->select('id', 'name', 'city')->get()
+//   Never interpolate user input into a SQL string.
+
+// ---------------------------------------------------------------
+// VULNERABILITY 2 — Mass Assignment in update()
+// ---------------------------------------------------------------
+
+// Location: update() method, $school->update($request->all()).
+
+// What is happening:
+//   $request->all() passes every field the client sends to the model's
+//   update() method. If the School model has no $fillable defined
+//   (or uses $guarded = []), an attacker can update any column.
+
+// What an attacker can do:
+//   Send a PUT request with body: {"is_admin": true, "plan": "enterprise", "stripe_id": "..."}
+//   This could escalate privileges, change billing tier, or overwrite
+//   internal fields that should never be user-writable (e.g. verified_at, role).
+
+// Severity: HIGH — privilege escalation, data integrity.
+
+// Fix:
+//   Use a FormRequest with validation rules, then pass only validated fields:
+//     $school->update($request->validated())
+//   Ensure School::$fillable lists only the columns a user should be able to change:
+//     protected $fillable = ['name', 'address', 'contact_email', 'phone'];
+//   Never include: id, role, is_admin, verified_at, stripe_id, etc. in $fillable.
+
+// ---------------------------------------------------------------
+// VULNERABILITY 3 — Unrestricted File Upload (type) in uploadLogo()
+// ---------------------------------------------------------------
+
+// Location: uploadLogo(), no validation before move().
+
+// What is happening:
+//   There is no check on the file's MIME type or extension.
+//   An attacker can upload a PHP file disguised as an image.
+
+// What an attacker can do:
+//   Upload shell.php (or shell.php.jpg on some server configs).
+//   Because files are moved to public_path('uploads'), the file is
+//   directly accessible via HTTP: https://tripz.com/uploads/shell.php
+//   Visiting that URL executes the PHP file on the server — remote code execution.
+
+// Severity: CRITICAL — full server compromise.
+
+// Fix:
+//   Validate MIME type and extension before touching the file:
+//     $request->validate(['logo' => 'required|image|mimes:jpg,jpeg,png,webp|max:2048'])
+//   Store the file outside the public directory using Storage::disk('private'):
+//     $path = $request->file('logo')->store('logos', 'private');
+//   Serve it via a signed URL or a controller that reads the stream.
+//   Never put user-uploaded files in public_path where PHP can execute them.
+
+// ---------------------------------------------------------------
+// VULNERABILITY 4 — Path Traversal via Original Filename in uploadLogo()
+// ---------------------------------------------------------------
+
+// Location: uploadLogo(), $filename = $file->getClientOriginalName().
+
+// What is happening:
+//   The original filename provided by the client's browser is used as-is
+//   for the stored file path. A client can send any filename string they want.
+
+// What an attacker can do:
+//   Upload a file with the name: ../../config/app.php
+//   The file->move() call resolves to public_path('uploads/../../config/app.php')
+//   which is public_path('../../config/app.php'), overwriting config/app.php.
+//   On Linux this navigates up two directories from public/uploads/.
+//   This can overwrite arbitrary files the web server process has write access to.
+
+// Severity: CRITICAL — arbitrary file write, can overwrite .env or config files.
+
+// Fix:
+//   Never use getClientOriginalName() for storage.
+//   Generate a random name:
+//     $path = $request->file('logo')->storeAs('logos', Str::uuid() . '.' . $ext, 'private');
+//   Or use store() which generates a UUID filename automatically:
+//     $path = $request->file('logo')->store('logos', 'private');
+
+// ---------------------------------------------------------------
+// VULNERABILITY 5 — IDOR (Insecure Direct Object Reference) in getBookings()
+// ---------------------------------------------------------------
+
+// Location: getBookings(), no authorisation check.
+
+// What is happening:
+//   The route accepts a $school_id from the URL and returns all bookings
+//   for that school with no check on whether the authenticated user is
+//   allowed to view that school's data.
+
+// What an attacker can do:
+//   A logged-in user from School A sends GET /schools/42/bookings.
+//   If 42 is School B, they receive School B's full booking list —
+//   including student names, amounts, and dates — without permission.
+//   Enumerate IDs (1, 2, 3, ...) to harvest all booking data.
+
+// Severity: HIGH — unauthorised data disclosure, GDPR / privacy violation.
+
+// Fix:
+//   Add an authorisation check using a Policy or Gate:
+//     $this->authorize('viewBookings', $school);
+//   The SchoolPolicy::viewBookings() method should check:
+//     return $user->id === $school->admin_user_id || $user->hasRole('tripz-admin');
+//   Alternatively use middleware: ->middleware('can:view,school')
+
+// ---------------------------------------------------------------
+// VULNERABILITY 6 — Path Traversal in exportData()
+// ---------------------------------------------------------------
+
+// Location: exportData(), storage_path($file) with user-controlled $file.
+
+// What is happening:
+//   The $file variable is taken directly from the query string and passed
+//   to storage_path(). storage_path() just prepends the storage directory
+//   path — it does not validate or sanitise the input.
+
+// What an attacker can do:
+//   Request GET /admin/export?file=../../../.env
+//   storage_path('../../../.env') resolves to /var/www/html/.env
+//   The response sends the .env file as a download — exposing APP_KEY,
+//   DB_PASSWORD, MAIL_PASSWORD, and every other secret in the application.
+//   Further: ?file=../../../../etc/passwd on Linux systems.
+
+// Severity: CRITICAL — full secret/credential disclosure.
+
+// Fix:
+//   Define an allowed list of downloadable files, never accept a raw path:
+//     $allowed = ['reports/january.csv', 'reports/february.csv'];
+//     if (! in_array($file, $allowed, true)) { abort(403); }
+//   Or use a whitelist approach with a pre-defined map:
+//     $exports = ['jan-2024' => 'reports/jan-2024.csv'];
+//     $path = $exports[$request->get('report')] ?? abort(404);
+//   If you must accept dynamic paths, use realpath() and verify the result
+//   starts with the expected base directory before serving the file.
+
+// ---------------------------------------------------------------
+// VULNERABILITY 7 — SELECT * Leaking Sensitive Columns in search()
+// ---------------------------------------------------------------
+
+// Location: search(), SELECT * returns all columns.
+
+// What is happening:
+//   The SQL query selects every column from the schools table and returns
+//   it as JSON. The schools table likely contains internal fields that
+//   should never be public.
+
+// What an attacker can do:
+//   The JSON response might contain: stripe_customer_id, contract_terms,
+//   internal_notes, admin_user_id, or other sensitive business data.
+//   Even if this is not immediately exploitable, it is an information
+//   disclosure that aids further attacks.
+
+// Severity: MEDIUM — information disclosure.
+
+// Fix:
+//   Always select only the columns required for the response:
+//     School::select('id', 'name', 'city', 'logo_path')->where(...)->get()
+//   Alternatively use API Resources (SchoolResource) to control exactly
+//   what fields are serialised in every JSON response.
+
+// ---------------------------------------------------------------
+// VULNERABILITY 8 — Missing Authentication on All Routes
+// ---------------------------------------------------------------
+
+// Location: routes/api.php — no auth middleware on any route.
+
+// What is happening:
+//   None of the five routes require authentication. An anonymous HTTP
+//   request can call update, uploadLogo, getBookings, and exportData.
+
+// What an attacker can do:
+//   Unauthenticated actors can: edit any school, upload malicious files,
+//   view all bookings, and download arbitrary files from storage.
+//   Combined with the other vulnerabilities, no login is needed to
+//   exploit the most critical paths.
+
+// Severity: CRITICAL — unauthenticated access to destructive operations.
+
+// Fix:
+//   Wrap all non-public routes in auth middleware:
+//     Route::middleware(['auth:sanctum'])->group(function () {
+//         Route::put('/schools/{school}', ...);
+//         Route::post('/schools/{school}/logo', ...);
+//         Route::get('/schools/{school_id}/bookings', ...);
+//         Route::get('/admin/export', ...)->middleware('can:access-admin');
+//     });
+//   Only search() might legitimately be public — but even then it should
+//   be rate-limited to prevent enumeration.

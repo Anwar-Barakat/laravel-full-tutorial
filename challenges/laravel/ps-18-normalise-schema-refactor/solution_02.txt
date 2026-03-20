@@ -1,0 +1,110 @@
+// ============================================================
+// SOLUTION 02 — Intentional Denormalisation & Rollback Strategy
+// Challenge 18: Normalise Schema Refactor
+// ============================================================
+
+// ---------------------------------------------------------
+// PART 1: INTENTIONAL DENORMALISATIONS TO KEEP
+// ---------------------------------------------------------
+
+// Keep: contact_email on bookings
+// — Rationale: school_email is the school's current email.
+//   A booking confirmation and invoice must always show the
+//   email address that was active at the time of booking.
+//   If the school later updates its email, historical booking
+//   records must remain correct for audit and legal purposes.
+// — contact_email is populated at booking creation by copying
+//   the school's current email. It is never updated automatically
+//   when the school changes its email.
+// — This is a deliberate snapshot denormalisation — the redundancy
+//   is the feature, not a bug.
+
+// Consider keeping: a price snapshot on bookings
+// — trips.price_per_student may change for future trips.
+// — If a refund dispute arises, we need the exact price
+//   that was agreed at booking time, not today's price.
+// — Add a price_per_student column to bookings and populate
+//   it at creation. This prevents silent financial recalculation.
+
+// Do NOT keep: school_name, school_phone, school_region
+// — These are purely reference data. The correct values
+//   always live in the schools table. There is no historical
+//   or legal reason to snapshot them.
+// — Any reports that need school name or region can JOIN to schools.
+
+// Do NOT keep: trip_destination, trip_departure inline
+// — Same reasoning: these are current trip facts, not point-in-time
+//   snapshots. The trip row is the source of truth.
+// — If a trip date is rescheduled, the new date is correct for all
+//   bookings (not a historical distinction).
+
+// ---------------------------------------------------------
+// PART 2: ENUM / CHECK CONSTRAINT FOR STATUS
+// ---------------------------------------------------------
+
+// Option A: MySQL ENUM column
+// — Change: $table->string('status') →
+//   $table->enum('status', ['pending','confirmed','cancelled','completed'])
+// — Pros: enforced at DB level, clear in schema.
+// — Cons: adding a new status requires an ALTER TABLE (can lock
+//   the table on older MySQL versions).
+
+// Option B: Keep string + add a CHECK constraint
+// — Keep status as string('status').
+// — Add: DB::statement("ALTER TABLE bookings ADD CONSTRAINT
+//   chk_booking_status CHECK (status IN
+//   ('pending','confirmed','cancelled','completed'))");
+// — Pros: easier to extend without ALTER TABLE on the column type.
+// — Cons: CHECK constraints are not universally enforced in
+//   older MySQL versions (< 8.0.16).
+
+// Option C: Application-layer validation only
+// — Keep string, validate in the Booking model using a cast
+//   and a model event that throws if the value is invalid.
+// — Not recommended: DB integrity should not rely solely on
+//   the application layer — direct DB inserts would bypass it.
+
+// Recommended: Option A for simplicity, with awareness of
+// the ALTER TABLE cost on large tables. Use pt-online-schema-change
+// (Percona) for zero-downtime ENUM changes on large production tables.
+
+// ---------------------------------------------------------
+// PART 3: ROLLBACK STRATEGY
+// ---------------------------------------------------------
+
+// The multi-migration approach supports rollback at each step:
+
+// Rolling back Migration File 5 (drop old columns)
+// — The down() method re-adds the old columns to bookings.
+// — Data is re-populated from schools and trips tables.
+//   This is only safe if schools and trips tables still exist
+//   (i.e. migrations 1–4 are not also rolled back).
+
+// Rolling back Migration Files 3 & 4 (add FKs, populate)
+// — The down() method drops school_id, trip_id, contact_email
+//   columns from bookings.
+// — The old school/trip columns are still present (migration 5
+//   has not run yet), so the application still works.
+
+// Rolling back Migration Files 1 & 2 (new tables + backfill)
+// — The down() method drops schools, trips, payments tables.
+// — The bookings table is restored to its original form
+//   (old columns still present, new columns not yet added).
+
+// Key principle: never drop an old column in the same migration
+// that adds its replacement. Always separate the two operations
+// by at least one deploy cycle.
+
+// ---------------------------------------------------------
+// PART 4: APPLICATION-LEVEL CHANGES REQUIRED
+// ---------------------------------------------------------
+
+// After the schema is normalised, the application code must be updated:
+
+// Booking model: replace $booking->school_name with $booking->school->name
+// Booking model: replace $booking->trip_destination with $booking->trip->destination
+// Booking creation: set contact_email from school at time of creation
+// Booking creation: set price_per_student snapshot from trip at time of creation
+// Any reports using raw bookings columns must switch to JOIN queries
+// Factory / seeder: update to create schools and trips separately,
+//   then reference their IDs when creating bookings

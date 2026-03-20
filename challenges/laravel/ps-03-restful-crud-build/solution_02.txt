@@ -1,0 +1,122 @@
+// SOLUTION 02 — TripResource, TripController, routes, and patterns
+// =========================================================
+// This solution covers the API surface: Resource formatting,
+// controller logic, the ?include= pattern, and route setup.
+
+// ---------------------------------------------------------
+// PART 1: TripResource — whenLoaded and whenCounted
+// ---------------------------------------------------------
+// Create: php artisan make:resource TripResource
+//
+// toArray() should return:
+//   'id'                 => $this->id
+//   'destination'        => $this->destination
+//   'departure_date'     => $this->departure_date->format('Y-m-d')
+//     — format() on a Carbon instance gives '2026-06-15' string
+//     — avoids sending a full ISO datetime when only the date matters
+//   'return_date'        => $this->return_date->format('Y-m-d')
+//   'price_per_student'  => (float) $this->price_per_student
+//     — cast to float so JSON encodes as 349.99, not "349.99" string
+//   'max_capacity'       => $this->max_capacity
+//   'status'             => $this->status
+//   'created_at'         => $this->created_at->toISOString()
+//
+//   'school'         => new SchoolResource($this->whenLoaded('school'))
+//     — whenLoaded: only includes 'school' key if the relationship is in memory.
+//     — If school was NOT eager-loaded, the key is omitted from JSON entirely.
+//     — This prevents N+1 during serialisation AND keeps the response lean
+//       when the client did not request the school relationship.
+//
+//   'bookings_count' => $this->whenCounted('bookings')
+//     — whenCounted: only includes the key if withCount('bookings') was called.
+//     — If not counted, omitted. No lazy DB query is triggered.
+
+// ---------------------------------------------------------
+// PART 2: TripController — thin controller pattern
+// ---------------------------------------------------------
+// The controller should contain NO business logic.
+// Delegate complex query building to the model scopes or a TripService class.
+//
+// index($request):
+//   Start query: Trip::query()
+//   Apply status filter if present: ->when($request->status, fn($q, $v) => $q->where('status', $v))
+//     — when() only applies the closure if the first argument is truthy.
+//     — Clean, readable, no if/else blocks.
+//   Apply school_id filter: ->when($request->school_id, fn($q, $v) => $q->where('school_id', $v))
+//   Parse ?include= param: $includes = explode(',', $request->include ?? '')
+//     — split the comma-separated string into an array of relationship names
+//   Conditionally eager-load school: if in_array('school', $includes) -> with('school:id,name')
+//   Conditionally add booking count: if in_array('bookings_count', $includes) -> withCount('bookings')
+//   Paginate: ->paginate(15)
+//   Return: TripResource::collection($trips)
+//     — collection() wraps each item in TripResource and adds pagination meta automatically
+//
+// store($request):   (TripRequest injected — validation already done)
+//   $trip = Trip::create($request->validated())
+//     — validated() returns only the fields that passed validation rules
+//     — Never use $request->all() here — it would bypass fillable protection
+//   return new TripResource($trip), 201
+//     — 201 Created is the correct HTTP status for a successful POST
+//
+// show($trip, $request):   (route model binding resolves the Trip)
+//   Same ?include= logic as index() but on a single model
+//   Use $trip->loadMissing(...) to load relationships only if not already loaded
+//   return new TripResource($trip)
+//
+// update($request, $trip):
+//   $trip->update($request->validated())
+//   return new TripResource($trip->refresh())
+//     — refresh() re-fetches the model from DB to include any DB-side defaults
+//       or computed columns that changed during the update
+//
+// destroy($trip):
+//   $trip->delete()   — soft delete because SoftDeletes trait is on the model
+//   return response()->noContent()
+//     — noContent() returns HTTP 204 with an empty body
+//     — 204 is the standard REST response for a successful DELETE
+
+// ---------------------------------------------------------
+// PART 3: Route setup
+// ---------------------------------------------------------
+// In routes/api.php:
+//
+//   Route::middleware('auth:sanctum')->group(function () {
+//       Route::apiResource('trips', TripController::class)
+//   })
+//
+// apiResource() registers 5 routes: index, store, show, update, destroy.
+// It omits the create and edit HTML form routes (those are for web, not API).
+//
+// The auth:sanctum middleware ensures every trip endpoint requires a valid
+// API token. Unauthenticated requests return 401 automatically.
+//
+// To see all registered routes: php artisan route:list --name=trips
+
+// ---------------------------------------------------------
+// PART 4: Policy for authorisation
+// ---------------------------------------------------------
+// Create: php artisan make:policy TripPolicy --model=Trip
+//
+// Policies answer: "can THIS user perform THIS action on THIS trip?"
+//   viewAny: any authenticated user can list trips
+//   view:    any authenticated user can view a specific trip
+//   create:  only school admins can create trips for their school
+//   update:  only the trip's school admin or a Tripz admin
+//   delete:  same as update
+//
+// Register policy in AuthServiceProvider, then call:
+//   $this->authorizeResource(Trip::class, 'trip') in the constructor
+// This auto-applies the policy to all 5 resource methods without
+// repeating $this->authorize() in each method.
+
+// ---------------------------------------------------------
+// PART 5: Handling soft-deleted records in route model binding
+// ---------------------------------------------------------
+// By default, Trip::find() and route model binding exclude soft-deleted rows.
+// Requesting GET /api/trips/5 where trip 5 is deleted returns 404 — correct.
+//
+// If you need a restore endpoint:
+//   Route::post('trips/{trip}/restore', ...) with withTrashed() in the binding
+//   Override resolveRouteBinding() on the model or use explicit withTrashed()
+//   in a dedicated method — do NOT add withTrashed() to the default binding
+//   as it would expose deleted records through the standard CRUD endpoints.

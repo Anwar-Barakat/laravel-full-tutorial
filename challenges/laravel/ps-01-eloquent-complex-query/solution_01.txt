@@ -1,0 +1,86 @@
+// SOLUTION 01 — Query Builder / selectRaw approach
+// =========================================================
+// This solution builds the entire report as a single database query
+// using Query Builder with raw expressions for aggregates.
+
+// ---------------------------------------------------------
+// STEP 1: Choose DB::table() over Eloquent here
+// ---------------------------------------------------------
+// Use DB::table('bookings') rather than the Booking model because
+// this is a pure reporting query — no model events, no casting, no
+// relationships need to be lazy-loaded. Query Builder is cleaner
+// for aggregate / reporting work.
+
+// ---------------------------------------------------------
+// STEP 2: Base query — join bookings to trips
+// ---------------------------------------------------------
+// Start from the bookings table.
+// leftJoin trips on bookings.trip_id = trips.id
+//   — leftJoin (not join) so that bookings with orphaned trip_id
+//     still appear rather than being silently dropped.
+// whereYear('bookings.created_at', now()->year)
+//   — scope to the current calendar year before any grouping.
+
+// ---------------------------------------------------------
+// STEP 3: selectRaw for all aggregate columns
+// ---------------------------------------------------------
+// select the following raw expressions:
+//   MONTH(bookings.created_at)                  as month_number
+//   MONTHNAME(bookings.created_at)              as month
+//   COUNT(bookings.id)                          as total_bookings
+//   SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END)
+//                                               as confirmed_bookings
+//   COALESCE(SUM(CASE WHEN status = 'paid' THEN amount ELSE 0 END), 0)
+//                                               as total_revenue
+//   COALESCE(AVG(bookings.amount), 0)           as avg_booking_value
+//
+// COALESCE prevents NULL when no rows exist for that month-group.
+// CASE WHEN inside SUM / COUNT is the standard SQL pattern for
+// conditional aggregation — avoids the need for HAVING or subqueries.
+
+// ---------------------------------------------------------
+// STEP 4: Subquery for top_destination
+// ---------------------------------------------------------
+// Add a correlated subquery inside selectRaw to find the destination
+// with the highest booking count for each month group:
+//
+//   (
+//     SELECT t2.destination
+//     FROM bookings b2
+//     JOIN trips t2 ON b2.trip_id = t2.id
+//     WHERE MONTH(b2.created_at) = MONTH(bookings.created_at)
+//       AND YEAR(b2.created_at) = YEAR(bookings.created_at)
+//     GROUP BY t2.destination
+//     ORDER BY COUNT(*) DESC
+//     LIMIT 1
+//   ) as top_destination
+//
+// This is a correlated subquery — it runs once per group row.
+// For very high traffic reports, consider caching (see solution_02).
+
+// ---------------------------------------------------------
+// STEP 5: groupByRaw for month extraction
+// ---------------------------------------------------------
+// groupByRaw('MONTH(bookings.created_at), MONTHNAME(bookings.created_at)')
+// Group by both the numeric month and its name so the SELECT alias
+// is valid across all MySQL strict-mode configurations.
+// orderByRaw('MONTH(bookings.created_at)') — ensures Jan→Dec order.
+
+// ---------------------------------------------------------
+// STEP 6: Handle missing months (no bookings)
+// ---------------------------------------------------------
+// The database query only returns months that have at least one booking.
+// After ->get(), use a Collection pipeline to fill in missing months:
+//   - Build a keyed collection of all 12 months with zero values.
+//   - Merge the query results into it, overwriting where data exists.
+//   - values() to re-index before returning.
+// This keeps the query simple and pushes the "fill gaps" logic to PHP,
+// which is trivial and does not need another DB round-trip.
+
+// ---------------------------------------------------------
+// STEP 7: Return as JSON
+// ---------------------------------------------------------
+// return response()->json($results)
+// The controller stays thin — no extra formatting logic here.
+// Consider wrapping in an API Resource (see solution_02) if this
+// endpoint will be consumed by a frontend that expects a consistent envelope.

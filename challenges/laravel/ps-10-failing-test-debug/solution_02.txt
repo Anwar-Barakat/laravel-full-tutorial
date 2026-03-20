@@ -1,0 +1,184 @@
+// SOLUTION 02 — Failing Test Debug: Writing the Fixed Model Code
+// Topic: Implementing the correct model code that makes all 4 tests pass
+// Approach: Fixed accessor, corrected comparison, restored scope, registered observer
+
+// ============================================================
+// FIXED: app/Models/Booking.php
+// ============================================================
+
+// The fixed model needs these 4 things working correctly:
+//   1. getTotalPriceAttribute() — correct accessor name
+//   2. isOverdue() with === comparison
+//   3. scopePending() method present
+//   4. Observer registered (handled in AppServiceProvider or via attribute)
+
+// ============================================================
+// FIX 1 — Correct Accessor (two valid approaches)
+// ============================================================
+
+// Approach A: Classic accessor (Laravel 8 and below, still works in newer versions)
+//   public function getTotalPriceAttribute(): float
+//   {
+//       return $this->student_count * $this->price_per_student;
+//   }
+//   Access via: $booking->total_price
+//
+// Approach B: Modern accessor using Attribute cast (Laravel 9+)
+//   use Illuminate\Database\Eloquent\Casts\Attribute;
+//
+//   protected function totalPrice(): Attribute
+//   {
+//       return Attribute::make(
+//           get: fn() => $this->student_count * $this->price_per_student
+//       );
+//   }
+//   Access via: $booking->total_price (same usage, cleaner syntax)
+//
+// To include total_price in JSON serialization automatically, add it to $appends:
+//   protected $appends = ['total_price'];
+//
+// Note: price_per_student must be a column in the bookings table for this to work
+// If it was removed from $fillable, the factory may not be setting it
+// Check the migration and factory to ensure price_per_student exists
+
+// ============================================================
+// FIX 2 — Correct isOverdue() Implementation
+// ============================================================
+
+// Corrected method with === comparison:
+//   public function isOverdue(): bool
+//   {
+//       if ($this->status === 'pending' && $this->created_at->diffInDays(now()) > 7) {
+//           return true;
+//       }
+//       return false;
+//   }
+//
+// Simplified to a single return expression:
+//   public function isOverdue(): bool
+//   {
+//       return $this->status === 'pending'
+//           && $this->created_at->diffInDays(now()) > 7;
+//   }
+//
+// Edge case to consider: what if created_at is null?
+// If the model uses $casts = ['created_at' => 'datetime'], Laravel auto-casts it to Carbon
+// Calling ->diffInDays() on null would throw an error
+// The test sets created_at explicitly, so this is safe in the test context
+// In production, add a null check: $this->created_at && $this->created_at->diffInDays(...)
+
+// ============================================================
+// FIX 3 — Restoring the scopePending() Query Scope
+// ============================================================
+
+// Add this method to the Booking model:
+//   public function scopePending(Builder $query): void
+//   {
+//       $query->where('status', 'pending');
+//   }
+//
+// This allows: Booking::pending()->get()
+// Also allows chaining: Booking::pending()->where('school_id', 5)->get()
+//
+// You could also define additional scopes for completeness:
+//   scopeConfirmed(Builder $query) — where status = 'confirmed'
+//   scopePaid(Builder $query)      — where status = 'paid'
+//   scopeBySchool(Builder $query, int $schoolId) — parameterised scope
+//
+// Scopes keep the model expressive and avoid repeating where() calls across the codebase
+
+// ============================================================
+// FIX 4 — Registering the BookingObserver
+// ============================================================
+
+// Step A: Ensure app/Observers/BookingObserver.php exists with a 'created' method
+//   The created() method fires immediately after a model is inserted into the database
+//   It receives the newly created model instance as its argument
+//
+//   class BookingObserver
+//   {
+//       public function created(Booking $booking): void
+//       {
+//           Mail::to($booking->contact_email)
+//               ->send(new BookingConfirmationMail($booking));
+//       }
+//   }
+//
+// Step B: Register the observer (choose one approach)
+//
+//   Option 1 — AppServiceProvider::boot() (works in all Laravel versions)
+//     public function boot(): void
+//     {
+//         Booking::observe(BookingObserver::class);
+//     }
+//
+//   Option 2 — #[ObservedBy] attribute on the model (Laravel 10+)
+//     Use the PHP 8 attribute directly above the class declaration
+//     This is more co-located and avoids the AppServiceProvider growing large
+//
+//   Option 3 — EventServiceProvider (older pattern, rarely used now)
+//     Register in the $observers property of EventServiceProvider
+
+// ============================================================
+// WHY Mail::fake() WORKS WITH OBSERVERS
+// ============================================================
+
+// Mail::fake() replaces the real mailer with a fake implementation before the test runs
+// When Booking::factory()->create() fires, it:
+//   1. Inserts the record into the database
+//   2. Fires the 'created' Eloquent event
+//   3. Laravel dispatches this to the BookingObserver::created() method
+//   4. The observer calls Mail::to()->send(new BookingConfirmationMail(...))
+//   5. The fake mailer intercepts the send call and records it
+//   6. Mail::assertSent() checks the fake mailer's recorded dispatches
+//
+// If the observer is not registered, step 3 never happens
+// If the observer is registered but the wrong method name is used (e.g., 'saving' vs 'created'),
+// the mail will not fire at the right time
+
+// ============================================================
+// ADDITIONAL: BookingConfirmationMail CLASS
+// ============================================================
+
+// The test imports: use App\Mail\BookingConfirmationMail
+// This class must exist at app/Mail/BookingConfirmationMail.php
+// Minimal implementation:
+//   class BookingConfirmationMail extends Mailable
+//   {
+//       use Queueable, SerializesModels;
+//
+//       public function __construct(public Booking $booking) {}
+//
+//       public function envelope(): Envelope
+//       {
+//           return new Envelope(subject: 'Booking Confirmation');
+//       }
+//
+//       public function content(): Content
+//       {
+//           return new Content(view: 'emails.booking-confirmation');
+//       }
+//   }
+//
+// The view file does not need to exist for the Mail::fake() test to pass
+// Mail::fake() prevents the view from being rendered
+
+// ============================================================
+// VERIFICATION — RUNNING THE FIXED TESTS
+// ============================================================
+
+// After all fixes are in place, run:
+//   php artisan test --filter BookingTest
+//
+// Expected output:
+//   PASS  Tests\Unit\BookingTest
+//   ✓ booking total price calculates correctly
+//   ✓ booking is overdue when unpaid after 7 days
+//   ✓ booking scope pending returns only pending
+//   ✓ booking confirmation email sent on creation
+//
+// If any test still fails, check:
+//   - Database migration includes the price_per_student column
+//   - BookingFactory sets student_count and price_per_student with sensible defaults
+//   - The BookingConfirmationMail class exists and is importable
+//   - The observer is registered in a service provider that is booted during tests

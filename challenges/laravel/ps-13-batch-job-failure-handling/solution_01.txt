@@ -1,0 +1,155 @@
+// SOLUTION 01 — Individual Dispatch Approach (no Bus::batch)
+// ============================================================
+// This approach dispatches jobs one by one and uses a "summary job"
+// chained at the very end to notify the admin. Simpler to reason about
+// but gives less granular batch progress tracking than Bus::batch.
+
+// ---------------------------------------------------------------
+// STEP 1 — Artisan command: SendMonthlyInvoices
+// ---------------------------------------------------------------
+
+// Resolve the target month/year from --month/--year options.
+// If no options given, default to "last month":
+//   use Carbon::now()->subMonth() to get the previous month and year.
+
+// Fetch all active schools:
+//   School::where('is_active', true)->get()
+// This gives you the full list to iterate over.
+
+// Before dispatching, filter out schools with no bookings this month.
+// Use a sub-query or a separate query per school:
+//   Booking::where('school_id', $school->id)
+//           ->whereMonth('created_at', $month)
+//           ->whereYear('created_at', $year)
+//           ->exists()
+// Schools that return false get skipped — log a line and continue.
+
+// For each school that has bookings, dispatch the job:
+//   GenerateSchoolInvoice::dispatch($school, $month, $year)
+//                         ->onQueue('invoices')
+// The ->onQueue('invoices') call overrides whatever default queue
+// is set in the job class itself — belt and braces.
+
+// Track two counters: $dispatched and $skipped.
+// After the loop, output them to the console with $this->info().
+
+// To notify the admin after all jobs finish, dispatch a separate
+// SendInvoiceBatchSummary job at the end of the command.
+// Chain it with a delay so it runs after the worker has had time
+// to process the other jobs — or, better, use Bus::chain() so
+// the summary job only fires after the last invoice job completes.
+
+// ---------------------------------------------------------------
+// STEP 2 — GenerateSchoolInvoice job: class-level properties
+// ---------------------------------------------------------------
+
+// Set $tries on the job class:
+//   public $tries = 3;
+// This tells Laravel to attempt the job at most 3 times total
+// (1 original attempt + 2 retries).
+
+// Set exponential backoff intervals in seconds:
+//   public $backoff = [10, 30, 60];
+// Laravel reads this array sequentially — retry 1 waits 10s,
+// retry 2 waits 30s, retry 3 waits 60s.
+// You can also define a backoff() method that returns the same
+// array if you prefer the method-based API.
+
+// Set a timeout so a hung PDF generator doesn't block the worker:
+//   public $timeout = 120;
+// 120 seconds is generous for a PDF; adjust to your PDF library.
+
+// ---------------------------------------------------------------
+// STEP 3 — GenerateSchoolInvoice job: handle() method
+// ---------------------------------------------------------------
+
+// First, re-check inside the job whether the school still has
+// bookings. The command did a pre-check, but data can change
+// between dispatch and execution. If no bookings, call
+// $this->delete() to remove the job without treating it as a
+// failure, then return early.
+
+// Use dependency injection via the handle() method signature
+// to pull in your InvoicePdfService:
+//   public function handle(InvoicePdfService $pdfService)
+// Laravel's service container will resolve and inject it
+// automatically — you do NOT need to pass it via the constructor.
+
+// Calculate the total invoice amount from bookings:
+//   $total = Booking::where('school_id', $this->school->id)
+//                   ->whereMonth('created_at', $this->month)
+//                   ->whereYear('created_at', $this->year)
+//                   ->sum('amount');
+
+// Generate the PDF using the injected service:
+//   $path = $pdfService->generate($this->school, $this->month, $this->year, $total);
+// The service should store the file somewhere like:
+//   storage/app/invoices/{year}/{month}/{school_id}.pdf
+// Return the storage path, not the public URL.
+
+// Persist the Invoice model (create or update for idempotency):
+//   Invoice::updateOrCreate(
+//       ['school_id' => $this->school->id, 'month' => $this->month, 'year' => $this->year],
+//       ['pdf_path' => $path, 'total_amount' => $total, 'sent_at' => now()]
+//   );
+// Using updateOrCreate means re-running the job after a partial
+// failure won't create duplicate Invoice records.
+
+// Queue the confirmation email (do not send inline — it would
+// block the worker for the duration of the SMTP round-trip):
+//   Mail::to($this->school->contact_email)
+//       ->queue(new SchoolInvoiceMail($invoice));
+// The Mailable should accept the Invoice model and attach the PDF
+// using $this->attach(storage_path('app/' . $invoice->pdf_path)).
+
+// Log success after everything is saved and queued:
+//   Log::info("Invoice generated for \"{$this->school->name}\"", [
+//       'school_id' => $this->school->id,
+//       'month'     => $this->month,
+//       'year'      => $this->year,
+//       'total'     => $total,
+//   ]);
+
+// ---------------------------------------------------------------
+// STEP 4 — GenerateSchoolInvoice job: failed() method
+// ---------------------------------------------------------------
+
+// The failed() method is called by Laravel after ALL retries are
+// exhausted. It receives the Throwable that caused the final failure.
+//   public function failed(\Throwable $exception): void
+
+// Log the failure with full context:
+//   Log::error("Invoice job failed for \"{$this->school->name}\"", [
+//       'school_id' => $this->school->id,
+//       'month'     => $this->month,
+//       'year'      => $this->year,
+//       'error'     => $exception->getMessage(),
+//   ]);
+
+// Optionally notify via Slack or email:
+//   Notification::route('slack', config('services.slack.webhook'))
+//               ->notify(new InvoiceJobFailedNotification($this->school, $exception));
+// Keep this notification fire-and-forget — do not throw from failed().
+
+// ---------------------------------------------------------------
+// STEP 5 — Running the queue worker
+// ---------------------------------------------------------------
+
+// Start a worker dedicated to the invoices queue:
+//   php artisan queue:work --queue=invoices --tries=3
+// The --tries flag on the CLI is a fallback; $tries on the job
+// takes precedence when set.
+
+// In production, use Supervisor to keep the worker alive.
+// A minimal Supervisor config block:
+//   [program:invoices-worker]
+//   command=php /var/www/artisan queue:work --queue=invoices --sleep=3
+//   autostart=true
+//   autorestart=true
+//   numprocs=2   ; run 2 parallel workers for the invoices queue
+
+// Monitor failed jobs:
+//   php artisan queue:failed          -- list all failures
+//   php artisan queue:retry {id}      -- retry a single job
+//   php artisan queue:retry all       -- retry everything (use carefully)
+//   php artisan queue:flush           -- permanently delete all failed jobs

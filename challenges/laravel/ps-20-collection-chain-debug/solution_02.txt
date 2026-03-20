@@ -1,0 +1,128 @@
+// ============================================================
+// SOLUTION 02 — Bug 5 & General Collection Debugging Techniques
+// Challenge 20: Collection Chain Debug
+// ============================================================
+
+// ---------------------------------------------------------
+// BUG 5: Returns lowest amount, not highest
+// ---------------------------------------------------------
+
+// What is wrong:
+// — The code calls ->min('amount') but the requirement is to
+//   find the booking with the HIGHEST amount.
+// — ->min() returns the minimum (smallest) value in the collection
+//   for the given key.
+// — ->max() returns the maximum (largest) value.
+// — This is a simple method name typo: min instead of max.
+
+// Root cause summary:
+// — Copy-paste error or misremembering the method name.
+//   min() and max() do exactly opposite things.
+
+// Fix approach:
+// — Replace ->min('amount') with ->max('amount').
+//   This returns the highest amount value as a scalar.
+// — If you need the full Booking model with the highest amount
+//   (not just the number), use ->sortByDesc('amount')->first()
+//   instead, which returns the Eloquent model object.
+
+// ---------------------------------------------------------
+// GENERAL DEBUGGING TECHNIQUE 1: dd() / dump() mid-chain
+// ---------------------------------------------------------
+
+// You can insert ->pipe(fn($c) => dd($c)) at any point in a
+// Collection chain to inspect the current state without
+// breaking the chain syntax.
+
+// Alternatively, tap() executes a callback without modifying
+// the collection and returns the original:
+// — ->tap(fn($c) => dump($c->count()))
+// — Insert ->tap() between chain steps to see counts and
+//   sample values at each stage without interrupting the chain.
+
+// Use this approach when:
+// — The final output is wrong but you do not know at which step.
+// — Insert tap() after each step and progressively narrow down
+//   which step first produces wrong data.
+
+// ---------------------------------------------------------
+// GENERAL DEBUGGING TECHNIQUE 2: ->toArray() to inspect structure
+// ---------------------------------------------------------
+
+// Collection objects can be hard to read in Xdebug or browser
+// dumps because they wrap the items in an Illuminate object.
+// — Calling ->toArray() converts the collection to a plain PHP
+//   array, which is much easier to read in dump output.
+// — Use dd($collection->toArray()) to see the raw data structure.
+
+// ---------------------------------------------------------
+// GENERAL DEBUGGING TECHNIQUE 3: Eloquent Collection vs Query Builder
+// ---------------------------------------------------------
+
+// There are two different where() methods in Laravel:
+
+// A. Query Builder where() (SQL)
+//   — Booking::where('status', 'paid')->get()
+//   — Runs a SQL WHERE clause before data is fetched.
+//   — Uses strict SQL equality (=).
+//   — Returns an Eloquent Collection.
+
+// B. Collection where() (PHP)
+//   — $collection->where('status', 'paid')
+//   — Runs after data is already in memory.
+//   — Uses loose PHP equality (==) by default.
+//   — Does NOT hit the database.
+//   — To use strict comparison, use ->where('status', '===', 'paid')
+//     or ->filter(fn($item) => $item->status === 'paid').
+
+// The common mistake: calling ->all() to load everything, then
+// using Collection ->where() expecting SQL-like behaviour.
+// For large tables, always filter at the query level, not in PHP.
+
+// ---------------------------------------------------------
+// GENERAL DEBUGGING TECHNIQUE 4: transform() vs map() for mutation
+// ---------------------------------------------------------
+
+// map() returns a NEW collection — the original is unchanged.
+// transform() modifies the ORIGINAL collection in place.
+
+// Bug pattern: using transform() on a shared collection property
+// (like $this->bookings in an analytics class) mutates the data
+// that subsequent methods rely on.
+
+// Rule: in any class that reuses a collection across methods,
+// always use map(), never transform().
+
+// ---------------------------------------------------------
+// GENERAL DEBUGGING TECHNIQUE 5: Key gaps after sort() / filter()
+// ---------------------------------------------------------
+
+// After filter() or sort(), the numeric keys of a collection
+// can have gaps (e.g. 0, 2, 5) because the original index
+// positions are preserved.
+
+// This causes bugs when:
+// — You iterate with a for loop expecting sequential indices.
+// — You json_encode the collection and the JSON has sparse keys,
+//   resulting in an object instead of an array in the frontend.
+
+// Fix: always call ->values() after filter() or sort() when
+// you need a clean 0-indexed sequential collection.
+
+// ---------------------------------------------------------
+// SUMMARY: When to do work in DB vs in Collection
+// ---------------------------------------------------------
+
+// Do the work in the DB (SQL) when:
+// — The dataset is large (thousands of rows or more).
+// — The operation is a simple aggregation (SUM, COUNT, AVG, GROUP BY).
+// — You do not need the full model objects for anything else.
+// — Efficiency matters: one DB round-trip is faster than loading
+//   thousands of rows into PHP memory.
+
+// Do the work in a Collection when:
+// — The data is already loaded for another purpose.
+// — The transformation is too complex for SQL (multi-step pivots,
+//   zero-filling, combining multiple aggregations from one dataset).
+// — The dataset is small and loading it all is acceptable.
+// — You need type-safe, testable PHP logic rather than raw SQL strings.

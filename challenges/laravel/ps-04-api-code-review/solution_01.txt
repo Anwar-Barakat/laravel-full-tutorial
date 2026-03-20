@@ -1,0 +1,184 @@
+// SOLUTION 01 — Full bug list with explanations
+// =========================================================
+// Walk through every problem in the code, one issue at a time.
+// Minimum 8 distinct problems are covered here.
+
+// ---------------------------------------------------------
+// PROBLEM 1: Mass assignment vulnerability — $request->all()
+// ---------------------------------------------------------
+// Location: store() method
+// Code:     Booking::create($request->all())
+//
+// Why it is a problem:
+//   $request->all() passes every field in the HTTP request directly to
+//   Eloquent's create(). An attacker can include any column in the JSON body —
+//   including 'status', 'amount', 'is_admin', 'school_id', or any other
+//   sensitive column. Laravel's mass assignment protection ($fillable) is
+//   bypassed if the model has $guarded = [] or if unexpected columns
+//   happen to be in $fillable.
+//
+// Fix:
+//   Always use $request->validated() after running a FormRequest,
+//   or manually whitelist: $request->only(['trip_id', 'school_id', 'notes']).
+//   Never pass $request->all() directly to create() or update().
+
+// ---------------------------------------------------------
+// PROBLEM 2: No authentication middleware on any route
+// ---------------------------------------------------------
+// Location: routes/api.php — all three routes
+// Code:     Route::post/get/delete with no middleware
+//
+// Why it is a problem:
+//   Anyone on the internet — without a session or token — can:
+//     GET /bookings  — read all bookings (data leak)
+//     POST /bookings — create bookings as anyone (data poisoning)
+//     DELETE /bookings/{id} — delete any booking (destructive)
+//   There is zero access control. This is a critical security gap.
+//
+// Fix:
+//   Wrap all routes in Route::middleware('auth:sanctum')->group(...)
+//   Sanctum validates the Bearer token on every request.
+//   Unauthenticated requests automatically receive 401 Unauthorized.
+
+// ---------------------------------------------------------
+// PROBLEM 3: No input validation in store()
+// ---------------------------------------------------------
+// Location: store() method
+//
+// Why it is a problem:
+//   No validation means:
+//     - Required fields (trip_id, school_id) can be missing — DB insert fails
+//       with a cryptic 500 error or a DB exception leaked to the client.
+//     - Any data type is accepted (e.g. 'trip_id' = 'DROP TABLE').
+//     - Business rules (departure_date must be future, amount >= 0) are ignored.
+//   The database or application layer should never be the first and only
+//   line of defence against bad input.
+//
+// Fix:
+//   Create a StoreBookingRequest extending FormRequest.
+//   Define rules() with required fields, types, and FK existence checks.
+//   Inject it into store(StoreBookingRequest $request) — Laravel validates
+//   automatically before the method body runs.
+
+// ---------------------------------------------------------
+// PROBLEM 4: Booking::all() loads entire table into memory
+// ---------------------------------------------------------
+// Location: index() method
+//
+// Why it is a problem:
+//   Booking::all() executes SELECT * FROM bookings with no LIMIT.
+//   On a table with 50,000+ rows, this:
+//     - Consumes enormous PHP memory (each Eloquent model is an object).
+//     - Slows the query and the serialisation step.
+//     - Can exhaust PHP memory limit and cause a 500 error.
+//   Tripz will grow — this code will fail under real load.
+//
+// Fix:
+//   Use Booking::paginate(15) (or simplePaginate) to enforce a row limit.
+//   Return paginated JSON with metadata so the client can request page 2, 3, etc.
+
+// ---------------------------------------------------------
+// PROBLEM 5: Collection filter instead of query-level filter
+// ---------------------------------------------------------
+// Location: index() method — the if ($request->school_id) block
+//
+// Why it is a problem:
+//   $bookings = Booking::all() already fetches ALL rows from the DB.
+//   Then $bookings->filter(...) filters them in PHP — in memory, after the fact.
+//   Filtering happens after loading 50,000 rows, even if only 100 belong to
+//   the requested school. This is wasteful at every level: DB, network, memory.
+//
+// Fix:
+//   Apply the filter at the query level, before execution:
+//   Booking::when($request->school_id, fn($q, $v) => $q->where('school_id', $v))
+//         ->paginate(15)
+//   The WHERE clause runs in the database, returning only the needed rows.
+
+// ---------------------------------------------------------
+// PROBLEM 6: Loose comparison (==) when filtering school_id
+// ---------------------------------------------------------
+// Location: index() method — filter closure
+// Code:     $b->school_id == $request->school_id
+//
+// Why it is a problem:
+//   PHP's == is a loose comparison. It performs type coercion.
+//   school_id from the DB is an integer; school_id from the request is a string.
+//   In PHP, '0' == false and '0' == null are both true under loose comparison.
+//   This can produce unexpected matches or failures for edge-case IDs.
+//
+// Fix:
+//   Use === (strict comparison) if doing PHP-level filtering.
+//   Better: move the filter to the query level (see Problem 5) where the
+//   DB engine handles type comparison correctly.
+
+// ---------------------------------------------------------
+// PROBLEM 7: Null pointer crash in destroy() — find() returns null
+// ---------------------------------------------------------
+// Location: destroy() method
+// Code:     $booking = Booking::find($id); $booking->delete();
+//
+// Why it is a problem:
+//   Booking::find($id) returns null if no record with that ID exists.
+//   Calling ->delete() on null throws:
+//     "Call to a member function delete() on null"
+//   This is an unhandled exception that returns a 500 error to the client.
+//   The correct response for a missing resource is 404, not 500.
+//
+// Fix:
+//   Use Booking::findOrFail($id) — it automatically aborts with 404 if
+//   the record is not found. No manual null check needed.
+//   Alternatively: use route model binding (Booking $booking in the signature)
+//   and let Laravel resolve and 404 automatically.
+
+// ---------------------------------------------------------
+// PROBLEM 8: Wrong HTTP status codes
+// ---------------------------------------------------------
+// Location: store() and destroy() return values
+//
+// Why it is a problem:
+//   store() returns response()->json($booking) — this defaults to 200 OK.
+//   The correct status for a successful resource creation is 201 Created.
+//   200 tells the client "everything is fine" but does not signal that a new
+//   resource was created — some clients (and REST clients) rely on this.
+//
+//   destroy() returns response()->json(['message' => 'Deleted']) — this is 200 OK.
+//   The correct status for a successful DELETE with no response body is 204 No Content.
+//   Returning a JSON body with 200 on DELETE is non-standard and confusing.
+//
+// Fix:
+//   store():   return new BookingResource($booking), 201
+//   destroy(): return response()->noContent()   — 204, empty body
+
+// ---------------------------------------------------------
+// PROBLEM 9: No authorization — any authenticated user can delete any booking
+// ---------------------------------------------------------
+// Location: destroy() method (and store/index by extension)
+//
+// Why it is a problem:
+//   Even after adding auth:sanctum (Problem 2), any logged-in user can delete
+//   any booking — including bookings that belong to other schools.
+//   School admin A should not be able to delete School B's bookings.
+//
+// Fix:
+//   Create a BookingPolicy with a delete($user, $booking) method.
+//   Check that $user->school_id === $booking->school_id (or that user is a Tripz admin).
+//   Call $this->authorize('delete', $booking) in the controller,
+//   or use $this->authorizeResource(Booking::class, 'booking') in the constructor.
+
+// ---------------------------------------------------------
+// PROBLEM 10: No API Resource — raw model data exposed
+// ---------------------------------------------------------
+// Location: store() and index() return values
+//
+// Why it is a problem:
+//   response()->json($booking) serialises the entire Eloquent model including
+//   all columns — including any sensitive internal columns (e.g. internal_notes,
+//   payment_reference, soft-delete timestamps).
+//   The API contract is tightly coupled to the DB schema. Renaming a column
+//   breaks the API response.
+//
+// Fix:
+//   Create a BookingResource extending JsonResource.
+//   Define exactly which fields to expose in toArray().
+//   Return new BookingResource($booking) from store() and show().
+//   Return BookingResource::collection($bookings) from index().

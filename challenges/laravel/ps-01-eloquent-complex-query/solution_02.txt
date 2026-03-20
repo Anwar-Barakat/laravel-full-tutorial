@@ -1,0 +1,93 @@
+// SOLUTION 02 — Eloquent scopes + Collection post-processing + caching
+// =========================================================
+// This solution favours the Eloquent model, uses named scopes for
+// reusability, post-processes results with Laravel Collections to
+// handle missing months, and adds a caching layer for production.
+
+// ---------------------------------------------------------
+// STEP 1: Add a scope to the Booking model
+// ---------------------------------------------------------
+// Define a local scope on the Booking model: scopeForYear($query, $year)
+// This encapsulates the whereYear('created_at', $year) filter so it
+// can be reused across multiple report methods without repetition.
+//
+// Define a second scope: scopePaid($query) — whereStatus('paid')
+// Scopes keep the controller free of query logic and make
+// each filter unit-testable in isolation.
+
+// ---------------------------------------------------------
+// STEP 2: Run a single Eloquent query with eager-load hints
+// ---------------------------------------------------------
+// Use Booking::forYear(now()->year)
+//            ->with(['trip:id,destination'])   — eager load trip columns only
+//            ->get(['id', 'trip_id', 'school_id', 'status', 'amount', 'created_at'])
+//
+// Selecting only the columns you need (not SELECT *) reduces memory
+// usage when the bookings table is large.
+// with('trip:id,destination') avoids N+1 when accessing ->trip->destination
+// during the Collection grouping step below.
+
+// ---------------------------------------------------------
+// STEP 3: Group by month using Collections
+// ---------------------------------------------------------
+// After ->get(), call ->groupBy(fn($b) => $b->created_at->format('n'))
+// This groups the Eloquent collection by numeric month (1–12) in PHP.
+// No extra DB query is needed.
+//
+// Then map over each month group to compute:
+//   total_bookings       — $group->count()
+//   confirmed_bookings   — $group->where('status', 'confirmed')->count()
+//   total_revenue        — $group->where('status', 'paid')->sum('amount')
+//   avg_booking_value    — $group->avg('amount') ?? 0
+//   top_destination      — $group->groupBy('trip.destination')
+//                                 ->map->count()
+//                                 ->sortDesc()
+//                                 ->keys()
+//                                 ->first()
+//
+// Collections are lazy-evaluated and chainable — this is readable
+// and easy to test without touching the database.
+
+// ---------------------------------------------------------
+// STEP 4: Fill missing months
+// ---------------------------------------------------------
+// Build a base collection of all 12 months using:
+//   collect(range(1, 12))->mapWithKeys(fn($m) => [$m => [...zeroed row...]])
+//
+// Then merge the computed results into this base:
+//   $base->merge($computed)->values()
+//
+// This guarantees all 12 months appear in order, even if some have
+// no bookings at all — the zeros come from the base collection.
+
+// ---------------------------------------------------------
+// STEP 5: Cache the expensive report
+// ---------------------------------------------------------
+// Wrap the entire query + collection pipeline in:
+//   Cache::remember('report.monthly.' . now()->year, now()->addHours(1), fn() => ...)
+//
+// Monthly revenue reports are read-heavy and rarely need real-time precision.
+// A 1-hour TTL is a good starting point; adjust based on admin needs.
+// Tag the cache entry (Cache::tags(['reports'])->remember(...)) if you need
+// selective invalidation when new bookings are confirmed.
+
+// ---------------------------------------------------------
+// STEP 6: Format with an API Resource
+// ---------------------------------------------------------
+// Create a MonthlyRevenueResource that extends JsonResource.
+// In toArray(), define the exact keys the frontend expects.
+// This decouples the DB column names from the API contract —
+// if you rename a column, only the Resource changes, not the controller.
+//
+// Use MonthlyRevenueResource::collection($results) in the controller
+// to wrap the entire collection consistently.
+
+// ---------------------------------------------------------
+// STEP 7: Return from the controller
+// ---------------------------------------------------------
+// The controller method becomes:
+//   return MonthlyRevenueResource::collection($this->reportService->monthly())
+//
+// Delegate heavy logic to a ReportService class, keeping the controller
+// to a single line. Services are easier to test and reuse from
+// artisan commands, queued jobs, or scheduled tasks.
