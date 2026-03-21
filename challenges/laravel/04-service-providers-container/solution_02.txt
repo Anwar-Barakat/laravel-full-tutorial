@@ -288,43 +288,62 @@ class AppServiceProvider extends ServiceProvider
 Route::apiResource('bookings', BookingController::class);
 
 
-// ============================================================
-// Tips
-// ============================================================
+/*
+================================================================
+TIPS
+================================================================
 
-// register()   → runs FIRST — only bind things into the container here, nothing else is booted yet
-// boot()       → runs AFTER all providers are registered — safe to use routes, events, morphMap, config
+REGISTER() VS BOOT()
+---------------------
+• register() → runs FIRST — only bind things into the container here
+  - nothing else is booted yet — don't call other bindings here or crash
+• boot()     → runs AFTER all providers are registered
+  - safe to use routes, events, morphMap, config
+• ❌ never put $this->app->bind() inside boot()
+• ✅ always use register() for container bindings
 
-// register()   → if you call another binding inside register() and that binding isn't registered yet → crash
-// boot()       → never put $this->app->bind() here — always use register() for container bindings
+BIND() VS SINGLETON() VS INSTANCE()
+-------------------------------------
+• bind()      → new instance every time the class is resolved
+• singleton() → same instance reused for the entire request lifecycle
+• instance()  → register an already-constructed object as a singleton
+  - e.g. a third-party SDK client you built manually
 
-// bind()       → new instance every time the class is resolved from the container
-// singleton()  → same instance reused for the entire request lifecycle
-// instance()   → register an already-constructed object as a singleton (e.g. a third-party SDK client)
+BIND DIRECTION
+--------------
+• ✅ $this->app->bind(Interface::class, Concrete::class) → correct direction
+• ❌ $this->app->bind(Concrete::class, Interface::class) → reversed — Laravel can't resolve
+• ❌ $this->app->bind(Interface::class => Concrete::class) → invalid PHP (=> is array syntax)
+• ✅ two separate string arguments — not a key-value pair
 
-// $this->app->bind(Interface::class, Concrete::class)  → always interface → concrete (this direction)
-// $this->app->bind(Concrete::class, Interface::class)  → ❌ reversed — Laravel can't resolve an interface from a concrete
+CACHED DECORATOR
+----------------
+• CachedBookingRepository wraps EloquentBookingRepository
+  - both implement BookingRepositoryInterface
+  - swap ONE bind() line in the provider to switch between them
+  - controller and service never know which implementation they received
 
-// $this->app->bind(Interface::class => Concrete::class)  → ❌ invalid PHP — => is array syntax, not function args
-// $this->app->bind(Interface::class, Concrete::class)    → ✅ two separate string arguments
+CONTEXTUAL BINDING
+------------------
+• when()->needs()->give() → same interface, different concrete per class
+  - $this->app->when(BookingController::class)
+               ->needs(RepoInterface::class)
+               ->give(CachedRepo::class)
 
-// CachedBookingRepository wraps EloquentBookingRepository
-//   → both implement BookingRepositoryInterface → swap ONE bind() line in the provider to switch
-//   → controller and service never know which implementation they received (that's the point)
+ABORT() VS THROW IN SERVICES
+------------------------------
+• abort() in a Service → ties the service to HTTP — bad practice
+• ✅ throw new \InvalidArgumentException() → service stays HTTP-agnostic
+  - Laravel catches it in Handler → map to 422 in app/Exceptions/Handler.php
+  - or globally: $this->renderable(fn(\InvalidArgumentException $e) => response()->json(...))
 
-// when()->needs()->give()   → contextual binding — same interface, different concrete per class
-//   $this->app->when(BookingController::class)->needs(RepoInterface::class)->give(CachedRepo::class)
+SERIALIZE() + MD5() FOR CACHE KEYS
+------------------------------------
+• serialize($filters) → converts array to string (cache keys must be strings)
+  - ['status' => 'paid'] → "a:1:{s:6:"status";s:4:"paid";}"
+• md5(serialize($filters)) → hashes to fixed 32-char key
+  - same filters → same md5 → same cache hit ✅
+  - different filters → different md5 → different cache entry ✅
 
-// abort() in a Service layer  → works with API (returns JSON if Accept: application/json is set)
-//   but it ties the service to HTTP — the service shouldn't know it's called from a request
-// throw new \InvalidArgumentException()  → ✅ clean: service stays HTTP-agnostic
-//   Laravel catches it in Handler → map it to a 422 response in app/Exceptions/Handler.php
-//   or register it globally: $this->renderable(fn(\InvalidArgumentException $e) => response()->json(['message' => $e->getMessage()], 422))
-
-// serialize($filters)       → converts an array into a string so it can be used as a cache key
-//   ['status' => 'paid', 'per_page' => 10] → "a:2:{s:6:"status";s:4:"paid";s:8:"per_page";i:10;}"
-//   you can't use an array directly as a cache key — it must be a string
-// md5(serialize($filters))  → hashes that string into a fixed 32-char key → "bookings.e3b0c44298fc1c149afb"
-//   without md5: long ugly key | with md5: short, consistent, safe for any cache driver
-//   same filters → same md5 → same cache hit every time ✅
-//   different filters → different md5 → different cache entry ✅
+================================================================
+*/

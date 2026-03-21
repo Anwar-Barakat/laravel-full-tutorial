@@ -9,26 +9,308 @@
 // app/Http/Controllers/AuthController.php
 // ============================================================
 
+namespace App\Http\Controllers;
+
+use App\Http\Requests\LoginRequest;
+use App\Http\Requests\RegisterRequest;
+use App\Models\User;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\RateLimiter;
+
+class AuthController extends Controller
+{
+    public function register(RegisterRequest $request)
+    {
+        $validated = $request->validated();
+
+        $user = User::create([
+            'name'     => $validated['name'],
+            'email'    => $validated['email'],
+            'password' => bcrypt($validated['password']),
+        ]);
+
+        $token = $user->createToken('register', ['booking:create', 'booking:read']);
+
+        return response()->json([
+            'user'      => $user,
+            'token'     => $token->plainTextToken,
+            'abilities' => $token->accessToken->abilities,
+        ], 201);
+    }
+
+    public function login(LoginRequest $request)
+    {
+        $validated = $request->validated();
+
+        // Check rate limit BEFORE attempting auth
+        $key = 'login:' . $request->ip();
+
+        if (RateLimiter::tooManyAttempts($key, 5)) {
+            return response()->json([
+                'message'     => 'Too many login attempts.',
+                'retry_after' => RateLimiter::availableIn($key),
+            ], 429);
+        }
+
+        if (! Auth::attempt(['email' => $validated['email'], 'password' => $validated['password']])) {
+            RateLimiter::hit($key, 60);  // count each failed attempt
+            return response()->json(['message' => 'Invalid credentials'], 401);
+        }
+
+        RateLimiter::clear($key);  // reset counter on success
+
+        $user  = Auth::user();
+        $token = $user->createToken($validated['device_name'], ['booking:create', 'booking:read']);
+
+        return response()->json([
+            'user'      => $user,
+            'token'     => $token->plainTextToken,
+            'abilities' => $token->accessToken->abilities,
+        ]);
+    }
+
+    public function me(Request $request)
+    {
+        return response()->json($request->user());
+    }
+
+    public function logout(Request $request)
+    {
+        $request->user()->currentAccessToken()->delete();  // current token only
+
+        return response()->noContent();
+    }
+
+    public function logoutAll(Request $request)
+    {
+        $request->user()->tokens()->delete();  // all devices
+
+        return response()->noContent();
+    }
+}
 
 
 // ============================================================
 // app/Http/Requests/RegisterRequest.php
 // ============================================================
 
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class RegisterRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'name'                  => ['required', 'min:3', 'max:50'],
+            'email'                 => ['required', 'email', 'unique:users,email'],
+            'password'              => ['required', 'min:6', 'confirmed'],
+            'password_confirmation' => ['required', 'min:6'],
+        ];
+    }
+}
 
 
 // ============================================================
 // app/Http/Requests/LoginRequest.php
 // ============================================================
 
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class LoginRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'email'       => ['required', 'email', 'exists:users,email'],
+            'password'    => ['required', 'min:6'],
+            'device_name' => ['required', 'string'],  // used in createToken()
+        ];
+    }
+}
 
 
 // ============================================================
 // app/Http/Middleware/CheckTokenAbility.php
 // ============================================================
 
+namespace App\Http\Middleware;
+
+use Closure;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+class CheckTokenAbility
+{
+    public function handle(Request $request, Closure $next, string $ability): Response
+    {
+        if (! $request->user() || ! $request->user()->tokenCan($ability)) {
+            return response()->json([
+                'message' => 'Unauthorized. Missing ability: ' . $ability,
+            ], 403);
+        }
+
+        return $next($request);
+    }
+}
+
+
+// ============================================================
+// bootstrap/app.php  (register middleware alias)
+// ============================================================
+
+->withMiddleware(function (Middleware $middleware): void {
+    $middleware->alias([
+        'ability' => \App\Http\Middleware\CheckTokenAbility::class,
+        // OR use Sanctum's built-in alternatives:
+        // 'abilities' => \Laravel\Sanctum\Http\Middleware\CheckAbilities::class,       // ALL abilities required
+        // 'ability'   => \Laravel\Sanctum\Http\Middleware\CheckForAnyAbility::class,   // ANY ability required
+    ]);
+});
 
 
 // ============================================================
 // routes/api.php
 // ============================================================
+
+use App\Http\Controllers\AuthController;
+use App\Http\Controllers\BookingController;
+
+Route::post('/register', [AuthController::class, 'register']);
+Route::post('/login',    [AuthController::class, 'login']);
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/me',            [AuthController::class, 'me']);
+    Route::post('/logout',       [AuthController::class, 'logout']);
+    Route::delete('/logout-all', [AuthController::class, 'logoutAll']);
+
+    Route::post('/bookings', [BookingController::class, 'store'])
+        ->middleware('ability:booking:create');
+
+    Route::get('/bookings', [BookingController::class, 'index'])
+        ->middleware('ability:booking:read');
+});
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+AUTH::ATTEMPT()
+---------------
+• finds user by email in the database
+• runs Hash::check($password, $user->password) internally
+• match    → logs user in, returns true
+• no match → returns false
+• ❌ $user = User::where('email', $email)->first() — redundant, attempt() does this
+• ✅ attempt() finds the user + checks password in one step
+• after success:
+  - Auth::user() → authenticated User model
+  - Auth::id()   → user's ID
+
+CREATETOKEN()
+-------------
+• $user->createToken('name', ['ability1', 'ability2'])
+• returns NewAccessToken — a temporary in-memory wrapper:
+  - ->plainTextToken         → raw "1|abc123..." string → send to client
+  - ->accessToken            → PersonalAccessToken model — the DB row
+  - ->accessToken->abilities → ['booking:create', 'booking:read']
+  - ->accessToken->name      → 'device'
+  - ->accessToken->id        → 1
+• stored in personal_access_tokens table (hashed — never retrievable again)
+
+PLAINTEXTTOKEN
+--------------
+• only available right after creation — treat it like a password
+• Sanctum hashes it before storing — just like passwords
+• the "1|" prefix:
+  - "1|abc123xyz..."
+     ↑  ↑
+     ID  actual token hash
+  - ID used to find the DB row fast, then hash is compared
+
+HOW AUTH:SANCTUM RESOLVES THE REQUEST
+--------------------------------------
+• client sends: Authorization: Bearer 1|abc123xyz...
+  1. extracts the token from the header
+  2. splits on "|" → gets ID = 1
+  3. finds the row in personal_access_tokens where id = 1
+  4. hashes "abc123xyz..." and compares to stored hash
+  5. match → loads User model + attaches token to the request
+• by the time your controller runs:
+  - $request->user()                       → the User model
+  - $request->user()->currentAccessToken() → the PersonalAccessToken DB row
+
+TOKENCAN()
+----------
+• $request->user()->tokenCan('booking:create')
+  is the same as: $request->user()->currentAccessToken()->can('booking:create')
+• tokenCan() is a shortcut in HasApiTokens trait:
+  - reads abilities column from the DB row
+  - checks if $ability is in that array
+• requires HasApiTokens trait on User model:
+  - use Laravel\Sanctum\HasApiTokens;
+  - gives: createToken(), tokens(), currentAccessToken(), tokenCan()
+
+TOKEN ABILITIES
+---------------
+• Sanctum built-in middleware (register as aliases):
+  - CheckAbilities::class     → token must have ALL abilities  (AND)
+  - CheckForAnyAbility::class → token must have AT LEAST ONE  (OR)
+• Route usage:
+  - ->middleware('abilities:booking:create,booking:read') → requires BOTH
+  - ->middleware('ability:booking:create')                → requires at least one
+• Laravel splits on ':' and passes the remaining string as $ability to middleware
+
+RATE LIMITING LOGIN
+-------------------
+• correct order:
+  1. tooManyAttempts($key, $max)  → check BEFORE the attempt
+  2. Auth::attempt([...])         → try the credentials
+  3. RateLimiter::hit($key, $ttl) → count EACH failed attempt
+  4. RateLimiter::clear($key)     → reset counter on successful login
+• ❌ wrong: attempt first → limit check after success (limit never applies)
+• ✅ right: check → attempt → hit on fail → clear on success
+• availableIn($key) → seconds until window resets → use as retry_after
+• key: 'login:' . $request->ip()  → per-IP
+  combine with email for per-account: 'login:' . $request->ip() . ':' . $request->email
+
+CURRENTACCESSTOKEN VS TOKENS()
+-------------------------------
+• currentAccessToken()->delete() → revoke only THIS request's token
+• tokens()->delete()             → revoke ALL tokens (all devices)
+• always split into two methods:
+  - POST /logout       → currentAccessToken()->delete()
+  - DELETE /logout-all → tokens()->delete()
+
+AUTH:SANCTUM GUARD
+------------------
+• middleware('auth:sanctum') → returns 401 if no valid Bearer token sent
+• $request->user()           → authenticated User model inside protected routes
+• Auth::user()               → same, but only available after Auth::attempt()
+  - inside protected routes always use $request->user() — cleaner
+
+ARTISAN
+-------
+• php artisan sanctum:install          → config + personal_access_tokens table
+• php artisan make:controller AuthController
+• php artisan make:request RegisterRequest
+• php artisan make:middleware CheckTokenAbility
+
+================================================================
+*/

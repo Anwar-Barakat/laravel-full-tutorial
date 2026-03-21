@@ -213,70 +213,81 @@ class BookingService
 // Tips
 // ============================================================
 
-// ─── Custom channel ──────────────────────────────────────────
-// Must implement send(mixed $notifiable, Notification $notification): void
-// Laravel calls send() automatically when the channel is listed in via()
-// Use WhatsAppChannel::class in via() — not a string like 'whatsapp'
-// No interface required — just the method name must be send()
+/*
+================================================================
+TIPS
+================================================================
 
-// ─── Value object (WhatsAppMessage) ──────────────────────────
-// Plain class — no Laravel base class needed
-// Holds message data ($content) — nothing else
-// toWhatsApp() returns it — channel reads ->content from it
-// Same idea as Laravel's own MailMessage / VonageMessage
-// new static($content) → same as new WhatsAppMessage($content)
-//   static = "this class" — safer than hardcoding the name for subclasses
+CUSTOM CHANNEL
+--------------
+• must implement send(mixed $notifiable, Notification $notification): void
+• Laravel calls send() automatically when the channel is listed in via()
+• use WhatsAppChannel::class in via() — not a string like 'whatsapp'
+• no interface required — just the method name must be send()
 
-// ─── routeNotificationFor ────────────────────────────────────
-// Laravel builds the method name from the channel name automatically
-//   'whatsapp' → routeNotificationForWhatsApp()
-//   'mail'     → routeNotificationForMail()     (built-in, reads ->email)
-//   'vonage'   → routeNotificationForVonage()   (built-in, reads ->phone)
-// Return the address the channel needs (phone, email, token...)
-// If method is missing, Laravel falls back to ->email or ->phone
+VALUE OBJECT (WHATSAPPMESSAGE)
+-------------------------------
+• plain class — no Laravel base class needed
+• holds message data ($content) — nothing else
+• toWhatsApp() returns it — channel reads ->content from it
+• same idea as Laravel's own MailMessage / VonageMessage
+• new static($content) → same as new WhatsAppMessage($content)
+  - static = "this class" — safer than hardcoding the name for subclasses
 
-// ─── $notifiable vs $notification ───────────────────────────
-// $notifiable   → WHO you send to    → the User model (has ->phone, ->email)
-// $notification → WHAT you send      → BookingConfirmedNotification (has toWhatsApp())
-// In send(): read address from $notifiable, read content from $notification
+ROUTENOTIFICATIONFOR
+---------------------
+• Laravel builds the method name from the channel name automatically:
+  - 'whatsapp' → routeNotificationForWhatsApp()
+  - 'mail'     → routeNotificationForMail()   (built-in, reads ->email)
+  - 'vonage'   → routeNotificationForVonage() (built-in, reads ->phone)
+• return the address the channel needs (phone, email, token...)
+• if method is missing, Laravel falls back to ->email or ->phone
 
-// ─── Rate limiting ────────────────────────────────────────────
-// RateLimiter::attempt($key, $max, $callback, $decaySeconds)
-//   $key          → unique string per user + notification type
-//   $max          → max attempts allowed in the window
-//   $callback     → what to run if not limited
-//   $decaySeconds → window length in seconds (3600 = 1 hour)
-//   returns true  → callback ran (under limit)
-//   returns false → limit exceeded, callback skipped
-// key format: "channel:{userId}:{notificationId}"
-//   getKey() → returns the model's primary key (same as ->id but safer)
+$NOTIFIABLE VS $NOTIFICATION
+------------------------------
+• $notifiable   → WHO you send to   → the User model (has ->phone, ->email)
+• $notification → WHAT you send     → BookingConfirmedNotification (has toWhatsApp())
+• in send(): read address from $notifiable, read content from $notification
 
-// ─── On-demand notifications ─────────────────────────────────
-// Use when you have no User model — just a raw email or phone number
-// Notification::route('channel', 'address')->notify(new SomeNotification())
-// Chain multiple routes for different channels
-// routeNotificationFor*() is NOT called — address is passed directly
-//
-// $user->notify()         → real User in the database, has account, has id
-//                           Laravel calls routeNotificationFor*() to get address
-//                           can store in notifications table (database channel)
-//
-// Notification::route()   → no User model — just a raw email or phone
-//                           you pass the address directly, no lookup needed
-//                           cannot use database channel — no user id to attach to
-//                           use for: parents, guests, anyone without an account
-//
-// Real world:
-//   school admin (has account)  → $admin->notify()
-//   parent (no account)         → Notification::route('mail', 'parent@example.com')
+RATE LIMITING
+-------------
+• RateLimiter::attempt($key, $max, $callback, $decaySeconds)
+  - $key          → unique string per user + notification type
+  - $max          → max attempts allowed in the window
+  - $callback     → what to run if not limited
+  - $decaySeconds → window length in seconds (3600 = 1 hour)
+  - returns true  → callback ran (under limit)
+  - returns false → limit exceeded, callback skipped
+• key format: "channel:{userId}:{notificationId}"
+  - getKey() → returns the model's primary key (same as ->id but safer)
 
-// ─── NotificationSent event ──────────────────────────────────
-// Laravel fires this automatically after every successful send
-// $event->channel      → 'mail', 'database', WhatsAppChannel::class
-// $event->notifiable   → the User (or anonymous for on-demand)
-// $event->notification → the Notification object sent
-// Use for: logging, analytics, delivery tracking
+ON-DEMAND NOTIFICATIONS
+------------------------
+• use when you have no User model — just a raw email or phone number
+• Notification::route('channel', 'address')->notify(new SomeNotification())
+• chain multiple routes for different channels
+• routeNotificationFor*() is NOT called — address is passed directly
+• $user->notify()       → real User in DB, calls routeNotificationFor*()
+                          can store in notifications table (database channel)
+• Notification::route() → no User model, address passed directly
+                          cannot use database channel — no user id to attach to
+                          use for: parents, guests, anyone without an account
+• real world:
+  - school admin (has account) → $admin->notify()
+  - parent (no account)        → Notification::route('mail', 'parent@example.com')
 
-// ─── Artisan ─────────────────────────────────────────────────
-// php artisan make:notification BookingConfirmedNotification
-// php artisan event:list   → shows all registered event → listener mappings
+NOTIFICATIONSENT EVENT
+-----------------------
+• Laravel fires this automatically after every successful send
+• $event->channel      → 'mail', 'database', WhatsAppChannel::class
+• $event->notifiable   → the User (or anonymous for on-demand)
+• $event->notification → the Notification object sent
+• use for: logging, analytics, delivery tracking
+
+ARTISAN
+-------
+• php artisan make:notification BookingConfirmedNotification
+• php artisan event:list → shows all registered event → listener mappings
+
+================================================================
+*/

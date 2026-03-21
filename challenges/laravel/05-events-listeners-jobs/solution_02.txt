@@ -274,83 +274,83 @@
     // Tips
     // ============================================================
 
-    // ─── Job traits ──────────────────────────────────────────────
-    // Dispatchable       → static ::dispatch() shortcut
-    // InteractsWithQueue → $this->release(), $this->fail(), $this->attempts()
-    // Queueable          → ->onQueue(), ->delay() when dispatching
-    // SerializesModels   → stores model ID in queue, re-fetches fresh from DB when job runs
-    // Batchable          → MUST add when job is used inside Bus::batch()
+/*
+================================================================
+TIPS
+================================================================
 
-    // ─── Retry config ────────────────────────────────────────────
-    // public $tries   = 3              → total attempts before permanently failed
-    // public $backoff = [30, 60, 120]  → wait 30s, then 60s, then 120s between retries
-    // failed(Throwable $e)             → called after ALL tries exhausted — always log here
-    // $this->release(30)  → retry in 30s    — TEMPORARY failure (timeout, rate limit)
-    // $this->fail($e)     → stop retrying   — PERMANENT failure (card declined)
-    // $this->attempts()   → how many times this job has run  (1, 2, 3...)
+JOB TRAITS
+----------
+• Dispatchable       → static ::dispatch() shortcut
+• InteractsWithQueue → $this->release(), $this->fail(), $this->attempts()
+• Queueable          → ->onQueue(), ->delay() when dispatching
+• SerializesModels   → stores model ID in queue, re-fetches fresh from DB when job runs
+• Batchable          → MUST add when job is used inside Bus::batch()
 
-    // ─── Batchable ───────────────────────────────────────────────
-    // $this->batch()               → returns Batch object, or null if job is standalone
-    // $this->batch()?->cancelled() → check at TOP of handle() before doing any work
-    //   ?->  nullsafe — prevents crash when job is dispatched outside a batch
-    //   without check → job runs even if batch was cancelled  ❌
-    //   with check    → returns early, does nothing           ✓
+RETRY CONFIG
+------------
+• public $tries   = 3             → total attempts before permanently failed
+• public $backoff = [30, 60, 120] → wait 30s, then 60s, then 120s between retries
+• failed(Throwable $e)            → called after ALL tries exhausted — always log here
+• $this->release(30)  → retry in 30s  — TEMPORARY failure (timeout, rate limit)
+• $this->fail($e)     → stop retrying — PERMANENT failure (card declined)
+• $this->attempts()   → how many times this job has run (1, 2, 3...)
 
-    // ─── Chain vs Batch ──────────────────────────────────────────
-    // Bus::chain([a, b, c])          → sequential — b runs only if a succeeded
-    //   one failure cancels all remaining jobs in the chain
-    //   use for DEPENDENT steps: payment → pdf → email
+BATCHABLE
+---------
+• $this->batch()               → returns Batch object, or null if job is standalone
+• $this->batch()?->cancelled() → check at TOP of handle() before doing any work
+  - ?-> nullsafe — prevents crash when job is dispatched outside a batch
+  - ❌ without check → job runs even if batch was cancelled
+  - ✅ with check    → returns early, does nothing
 
-    // Bus::batch([a, b, c])          → parallel — all run at the same time
-    //   default: one failure cancels the entire batch
-    //   ->allowFailures()            → one failure does NOT stop the rest
+CHAIN VS BATCH
+--------------
+• Bus::chain([a, b, c])          → sequential — b runs only if a succeeded
+  - one failure cancels all remaining jobs in the chain
+  - use for DEPENDENT steps: payment → pdf → email
+• Bus::batch([a, b, c])          → parallel — all run at the same time
+  - default: one failure cancels the entire batch
+  - ->allowFailures() → one failure does NOT stop the rest
+• Bus::batch([[a1,b1], [a2,b2]]) → parallel chains
+  - inner array = sequential chain per booking
+  - outer batch = all chains run in parallel
 
-    // Bus::batch([[a1,b1], [a2,b2]]) → parallel chains
-    //   inner array = sequential chain per booking
-    //   outer batch = all chains run in parallel
+BATCH CALLBACKS
+---------------
+• ->then()    → ALL jobs succeeded
+• ->catch()   → FIRST failure — only receives $batch and $e
+• ->finally() → ALWAYS runs at the end, pass or fail
+• $batch->id          → UUID of the batch
+• $batch->totalJobs   → total jobs in the batch
+• $batch->failedJobs  → how many failed
+• $batch->finished()  → true when all done
 
-    // ─── Batch callbacks ─────────────────────────────────────────
-    // ->then()    → ALL jobs succeeded
-    // ->catch()   → FIRST failure — only receives $batch and $e, nothing else
-    // ->finally() → ALWAYS runs at the end, pass or fail
-    //   fn body cannot be empty:  fn(Batch $b) =>  ❌  fn(Batch $b) => Log::info() ✓
+EXCEPTIONS (ENUM PATTERN)
+--------------------------
+• old way → 3 separate empty exception classes, 3 catch blocks
+• new way (PHP 8.1+) → one enum + one exception class:
+  - enum PaymentError { case GatewayTimeout; case CardDeclined; case RateLimit; }
+  - class PaymentException extends \Exception { public PaymentError $error }
+  - ONE catch(PaymentException) + match($e->error) inside
+  - adding a new error = one new enum case, not a new file
+• PaymentService    → detects the API response and THROWS the right exception
+• ProcessPaymentJob → CATCHES it and decides: release() / fail()
+• throw → sends the error up the call stack
+• catch → intercepts it — you decide what to do (retry, fail, log)
 
-    // $batch->id          → UUID of the batch
-    // $batch->totalJobs   → total jobs in the batch
-    // $batch->failedJobs  → how many failed
-    // $batch->finished()  → true when all done
+COLLECT
+-------
+• collect() → enter Collection world (can chain map, filter, etc.)
+• ->all()   → exit Collection world (back to plain PHP array)
+• ->map()   → always returns a Collection — call ->all() only at the very end
 
-    // ─── Exceptions ──────────────────────────────────────────────
-    // Exception class = just a label — gives each error a unique type so catch can tell them apart
-    // extending \Exception makes it catchable — empty body is enough for simple cases
-    //
-    // old way → 3 separate empty classes (one file each)
-    //   class GatewayTimeoutException extends \Exception {}
-    //   class CardDeclinedException    extends \Exception {}
-    //   class RateLimitException       extends \Exception {}
-    //   → 3 catches in the job to handle each separately
-    //
-    // new way (PHP 8.1+) → one enum + one exception class
-    //   enum PaymentError { case GatewayTimeout; case CardDeclined; case RateLimit; }
-    //   class PaymentException extends \Exception { public PaymentError $error }
-    //   → ONE catch(PaymentException) + match($e->error) inside
-    //   → adding a new error = one new enum case, not a new file
-    //
-    // PaymentService  → detects the API response and THROWS the right exception
-    // ProcessPaymentJob → CATCHES it and decides: release() / fail()
-    // Exception class itself does nothing — it is just the label between them
-    //
-    // throw   → only works inside service/job — sends the error up the call stack
-    // catch   → intercepts it — you decide what to do (retry, fail, log)
-    // match on $e->error → reads the enum case to pick the right action
+ARTISAN
+-------
+• php artisan queue:batches-table          → creates job_batches table (required)
+• php artisan queue:work --queue=bookings  → start worker on the 'bookings' queue
+• php artisan queue:failed                 → list permanently failed jobs
+• php artisan queue:retry all              → retry all failed jobs
 
-    // ─── collect ─────────────────────────────────────────────────
-    // collect()  → enter Collection world (can chain map, filter, etc.)
-    // ->all()    → exit Collection world  (back to plain PHP array)
-    // ->map()    → always returns a Collection — call ->all() only at the very end
-
-    // ─── Artisan ─────────────────────────────────────────────────
-    // php artisan queue:batches-table          → creates job_batches table (required)
-    // php artisan queue:work --queue=bookings  → start worker on the 'bookings' queue
-    // php artisan queue:failed                 → list permanently failed jobs
-    // php artisan queue:retry all              → retry all failed jobs
+================================================================
+*/

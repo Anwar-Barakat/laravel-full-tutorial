@@ -9,6 +9,12 @@
 // app/Policies/BookingPolicy.php
 // ============================================================
 
+class BookingPolicy {
+    public function viewAny(User $user){
+        return $user->can('view bookings');
+    }
+    public function viewAny(User $user){}
+}
 
 
 // ============================================================

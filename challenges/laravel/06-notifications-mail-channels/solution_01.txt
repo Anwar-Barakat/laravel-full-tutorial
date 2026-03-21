@@ -187,43 +187,58 @@ class BookingService
 // Tips
 // ============================================================
 
-// ─── via() ───────────────────────────────────────────────────
-// via($notifiable)        → returns array of channels to use
-//   $notifiable           → the model being notified (usually User)
-//   check user preferences here — don't hardcode all channels
-//   ['mail', 'database', 'vonage', 'broadcast']
+/*
+================================================================
+TIPS
+================================================================
 
-// ─── Channels ────────────────────────────────────────────────
-// toMail()      → email  — return (new MailMessage)->subject()->markdown()
-// toArray()     → database — stored in notifications table as JSON
-// toVonage()    → SMS via Vonage — return (new VonageMessage)->content()
-// toBroadcast() → real-time push — return new BroadcastMessage([...])
-//   method name must match the channel string in via() exactly
+VIA()
+-----
+• via($notifiable) → returns array of channels to use
+  - $notifiable → the model being notified (usually User)
+  - check user preferences here — don't hardcode all channels
+  - e.g. ['mail', 'database', 'vonage', 'broadcast']
 
-// ─── toMail() ────────────────────────────────────────────────
-// ->line('text')                     → simple text line
-// ->action('Label', $url)            → button — TWO args: label then URL
-// ->markdown('view', ['key' => $val])→ Markdown Blade template (recommended)
-//   mail::message → outer wrapper
-//   mail::table   → data table — header row FIRST, then |---|---| separator
-//   mail::button  → CTA button
+CHANNELS
+--------
+• toMail()      → email — return (new MailMessage)->subject()->markdown()
+• toArray()     → database — stored in notifications table as JSON
+• toVonage()    → SMS via Vonage — return (new VonageMessage)->content()
+• toBroadcast() → real-time push — return new BroadcastMessage([...])
+  - method name must match the channel string in via() exactly
 
-// ─── toArray() / database channel ────────────────────────────
-// stored in notifications table → data column as JSON
-// $user->notifications                        → all (query builder)
-// $user->unreadNotifications                  → unread only (Collection, no parentheses)
-// $user->notifications()->findOrFail($id)     → find one by UUID string
-// $notification->markAsRead()                 → mark one as read
-// $user->unreadNotifications->markAsRead()    → mark all as read
+TOMAIL()
+--------
+• ->line('text')                      → simple text line
+• ->action('Label', $url)             → button — TWO args: label then URL
+• ->markdown('view', ['key' => $val]) → Markdown Blade template (recommended)
+  - mail::message → outer wrapper
+  - mail::table   → data table — header row FIRST, then |---|---| separator
+  - mail::button  → CTA button
 
-// ─── Dispatching ─────────────────────────────────────────────
-// $user->notify(new BookingConfirmedNotification($booking))      → one user
-// Notification::send($users, new BookingConfirmedNotification()) → multiple users
+TOARRAY() / DATABASE CHANNEL
+-----------------------------
+• stored in notifications table → data column as JSON
+• $user->notifications                     → all (query builder)
+• $user->unreadNotifications               → unread only (Collection, no parentheses)
+• $user->notifications()->findOrFail($id)  → find one by UUID string
+• $notification->markAsRead()              → mark one as read
+• $user->unreadNotifications->markAsRead() → mark all as read
 
-// ─── Notifiable trait ────────────────────────────────────────
-// use Notifiable on User   → required to call ->notify() on the model
-//   gives: notify(), notifications(), unreadNotifications, readNotifications
+DISPATCHING
+-----------
+• $user->notify(new BookingConfirmedNotification($booking))      → one user
+• Notification::send($users, new BookingConfirmedNotification()) → multiple users
 
-// ─── Artisan ─────────────────────────────────────────────────
-// php artisan notifications:table                    → creates notifications migration
-// php artisan make:notification BookingConfirmedNotification
+NOTIFIABLE TRAIT
+----------------
+• use Notifiable on User → required to call ->notify() on the model
+  - gives: notify(), notifications(), unreadNotifications, readNotifications
+
+ARTISAN
+-------
+• php artisan notifications:table                         → creates notifications migration
+• php artisan make:notification BookingConfirmedNotification
+
+================================================================
+*/

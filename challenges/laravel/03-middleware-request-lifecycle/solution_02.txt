@@ -88,20 +88,33 @@ public function boot(): void
 }
 
 
-// ============================================================
-// Tips
-// ============================================================
+/*
+================================================================
+TIPS
+================================================================
 
-// handle()     → before $next = runs on way IN | after $next = runs on way OUT
-// terminate()  → runs after response sent (non-blocking) | needs to be appended to a group
-// max(0, x)    → prevents negative: 60 - 70 = -10 → max(0, -10) = 0
+MIDDLEWARE FLOW
+---------------
+• handle() before $next  → runs on the way IN  (before controller)
+• handle() after $next   → runs on the way OUT (after controller)
+• terminate()            → runs after response is sent (non-blocking)
+  - must be appended to a middleware group to be called
+• max(0, x)              → prevents negative values: 60 - 70 = -10 → max(0, -10) = 0
 
-// RateLimiter::for('name', fn)  → DEFINES the rule (writes the law)
-// RateLimiter::attempts($key)   → returns how many requests that key has made
-// 'throttle:api' in middleware  → ENFORCES the rule (the police) — without it, rule never runs
+RATELIMITER
+-----------
+• RateLimiter::for('name', fn) → DEFINES the rule (writes the law)
+• RateLimiter::attempts($key)  → returns how many requests that key has made
+• 'throttle:api' in middleware → ENFORCES the rule (the police)
+  - without it, the rule is defined but never runs
+• Limit::perMinute(60)->by($id) → allow 60 requests/min per $id
+• ->response(fn)                → custom response when limit is exceeded
 
-// Limit::perMinute(60)->by($id) → allow 60/min per $id
-// ->response(fn)                → custom response when limit exceeded
+RESPONSE HEADERS
+----------------
+• response()->json($data, $status, $headers)
+  - third param = headers array
+  - e.g. ['Retry-After' => 60] tells the client when to retry
 
-// response()->json($data, $status, $headers)
-//   third param = headers → e.g. ['Retry-After' => 60] tells client when to retry
+================================================================
+*/

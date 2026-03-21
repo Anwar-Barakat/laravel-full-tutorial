@@ -210,40 +210,49 @@ protected $dispatchesEvents = [
 // Use $dispatchesEvents when it should always fire on every model create.
 
 
-// ============================================================
-// Tips
-// ============================================================
+/*
+================================================================
+TIPS
+================================================================
 
-// ─── Dispatching ─────────────────────────────────────────────
-// event(new BookingCreated($booking))      → global helper
-// Event::dispatch(new BookingCreated(...)) → facade version
-// BookingCreated::dispatch($booking)       → static shortcut via Dispatchable trait
-//   all three are equivalent — pick one and stay consistent
+DISPATCHING
+-----------
+• event(new BookingCreated($booking))      → global helper
+• Event::dispatch(new BookingCreated(...)) → facade version
+• BookingCreated::dispatch($booking)       → static shortcut via Dispatchable trait
+  - all three are equivalent — pick one and stay consistent
 
-// ─── Listeners ───────────────────────────────────────────────
-// ShouldQueue          → async, runs on queue worker, does not block the response
-// no ShouldQueue       → sync, runs inline, blocks the response until done
-// InteractsWithQueue   → only add on queued listeners — gives release(), fail(), attempts()
+LISTENERS
+---------
+• ShouldQueue        → async, runs on queue worker, does not block the response
+• no ShouldQueue     → sync, runs inline, blocks the response until done
+• InteractsWithQueue → only add on queued listeners — gives release(), fail(), attempts()
+• public $queue      → which queue to push to  e.g. 'notifications'
+• public $tries      → total attempts before permanently failed
+• public $backoff    → wait between retries  [30, 60, 120] = 30s, 60s, 120s
+• failed()           → called after ALL tries exhausted — always add to log failures
 
-// public $queue        → which queue to push to  e.g. 'notifications'
-// public $tries        → total attempts before permanently failed
-// public $backoff      → wait between retries  [30, 60, 120] = 30s then 60s then 120s
-// failed()             → called after ALL tries exhausted — always add this to log failures
+EVENT CLASS
+-----------
+• public readonly Booking $booking
+  - public   → so listeners can read $event->booking
+  - readonly → nothing can overwrite it after construction
+• SerializesModels → stores only the model ID in the queue
+  - re-fetches fresh data from DB when the job runs
 
-// ─── Event class ─────────────────────────────────────────────
-// public readonly Booking $booking   → public so listeners read $event->booking
-//                                      readonly so nothing overwrites it after construction
-// SerializesModels                   → stores only the model ID in the queue
-//                                      re-fetches fresh data from DB when the job runs
+REGISTRATION
+------------
+• $listen array   → explicit, list every event → listener pair
+• Event::listen() → same as $listen but in boot(), useful for dynamic registration
+• auto-discovery  → Laravel 11 default, reads handle() type-hint automatically
+  - php artisan event:list → shows all registered event → listener mappings
 
-// ─── Registration ────────────────────────────────────────────
-// $listen array        → explicit, list every event → listener pair
-// Event::listen()      → same as $listen but in boot(), useful for dynamic registration
-// auto-discovery       → Laravel 11 default, reads handle() type-hint automatically
-//   php artisan event:list   → shows all registered event → listener mappings
+MODEL AUTO-DISPATCH
+-------------------
+• $dispatchesEvents = ['created' => BookingCreated::class]
+  - Laravel fires automatically after create() / save() / delete()
+• use event() in the service when you need control over WHEN it fires
+• use $dispatchesEvents when it should ALWAYS fire on every model create
 
-// ─── Model auto-dispatch ─────────────────────────────────────
-// $dispatchesEvents = ['created' => BookingCreated::class]
-//   Laravel fires automatically after create() / save() / delete()
-//   use event() in the service when you need control over when it fires
-//   use $dispatchesEvents when it should always fire on every model create
+================================================================
+*/
