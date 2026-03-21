@@ -9,20 +9,191 @@
 // app/Policies/BookingPolicy.php
 // ============================================================
 
-class BookingPolicy {
-    public function viewAny(User $user){
-        return $user->can('view bookings');
+namespace App\Policies;
+
+use App\Models\Booking;
+use App\Models\User;
+
+class BookingPolicy
+{
+    public function before(User $user, string $ability): bool|null
+    {
+        return $user->role === 'super_admin' ? true : null;
     }
-    public function viewAny(User $user){}
+
+    public function viewAny(User $user): bool
+    {
+        return true;
+    }
+
+    public function view(User $user, Booking $booking): bool
+    {
+        return match($user->role) {
+            'admin'        => true,
+            'school_admin' => $user->school_id === $booking->school_id,
+            default        => $booking->user_id === $user->id,
+        };
+    }
+
+    public function create(User $user): bool
+    {
+        return in_array($user->role, ['admin', 'school_admin']);
+    }
+
+    public function update(User $user, Booking $booking): bool
+    {
+        if ($user->role === 'admin') return true;
+
+        return $user->role === 'school_admin' && $user->school_id === $booking->school_id;
+    }
+
+    public function delete(User $user, Booking $booking): bool
+    {
+        if ($user->role === 'admin') return true;
+
+        return $user->role === 'school_admin' && $user->school_id === $booking->school_id;
+    }
+
+    public function restore(User $user, Booking $booking): bool
+    {
+        return $user->role === 'admin';
+    }
 }
 
 
 // ============================================================
-// app/Providers/AuthServiceProvider.php  (register policy)
+// app/Providers/AppServiceProvider.php  (register policy — Laravel 11)
 // ============================================================
 
+namespace App\Providers;
+
+use App\Models\Booking;
+use App\Policies\BookingPolicy;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        $this->app->bind(
+            BookingServiceInterface::class, BookingService::class
+        );
+    }
+
+    public function boot(): void
+    {
+        Gate::policy(Booking::class, BookingPolicy::class);
+    }
+}
 
 
 // ============================================================
 // app/Http/Controllers/BookingController.php  (authorize calls)
 // ============================================================
+
+namespace App\Http\Controllers;
+
+use App\Models\Booking;
+use App\Http\Requests\StoreBookingRequest;
+use App\Http\Requests\UpdateBookingRequest;
+use Illuminate\Http\Request;
+
+class BookingController extends Controller
+{
+    public function __construct(private BookingService $service) {}
+
+    public function index(Request $request)
+    {
+        $this->authorize('viewAny', Booking::class);
+
+        return $this->service->index($request->only(['status', 'trip_date', 'per_page']));
+    }
+
+    public function store(StoreBookingRequest $request)
+    {
+        $this->authorize('create', Booking::class);
+
+        return $this->service->createBooking($request->validated());
+    }
+
+    public function update(UpdateBookingRequest $request, Booking $booking)
+    {
+        $this->authorize('update', $booking);
+
+        return $this->service->updateBooking($request->validated(), $booking);
+    }
+
+    public function destroy(Booking $booking)
+    {
+        $this->authorize('delete', $booking);
+
+        return $this->service->deleteBooking($booking);
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+POLICY VS GATE
+--------------
+• Gate   → standalone rules NOT tied to a model
+  - Gate::define('view-dashboard', fn(User $user) => $user->isAdmin())
+• Policy → rules organized around a model — one class per model
+  - BookingPolicy → viewAny, view, create, update, delete, restore
+• use Policy when authorization revolves around a specific Eloquent model
+
+BEFORE()
+--------
+• runs BEFORE every other policy method
+• return true  → allow immediately — super_admin bypass
+• return null  → pass through — let the specific method decide
+• return false → deny regardless — useful for banned users
+• ❌ return false for non-admins → denies ALL regular users everything
+• ✅ return null to let normal checks run
+
+METHOD SIGNATURES
+-----------------
+• viewAny(User $user)                   → no model — "can they list at all?"
+• view(User $user, Booking $booking)    → specific model — "can they see THIS one?"
+• create(User $user)                    → no model — nothing exists yet
+• update(User $user, Booking $booking)  → specific model
+• delete(User $user, Booking $booking)  → specific model
+• restore(User $user, Booking $booking) → specific model (soft-deleted)
+
+CONTROLLER AUTHORIZATION
+------------------------
+• $this->authorize('action', $model)       → throws AuthorizationException → 403
+• $this->authorize('action', Model::class) → use class string when no instance (viewAny, create)
+• $user->can('action', $model)             → returns bool — use in conditionals
+• Gate::allows('action', $model)           → facade version of can()
+• $this->authorize() throws automatically — Laravel converts it to 403 JSON response
+
+POLICY REGISTRATION
+--------------------
+• Laravel 11: auto-discovers if naming convention is followed
+  - app/Models/Booking.php → app/Policies/BookingPolicy.php ← auto-linked
+• manual in AppServiceProvider::boot():
+  - Gate::policy(Booking::class, BookingPolicy::class)
+• old style in AuthServiceProvider:
+  - protected $policies = [Booking::class => BookingPolicy::class]
+
+ROLE-BASED VS RESOURCE-BASED
+------------------------------
+• role-based      → what role does this user have?
+  - $user->role === 'admin'
+• resource-based  → does this user OWN this resource?
+  - $booking->user_id === $user->id
+  - $user->school_id  === $booking->school_id
+• combine both in the same policy method — check role first, then ownership
+
+ARTISAN
+-------
+• php artisan make:policy BookingPolicy --model=Booking → generates all CRUD stubs
+• php artisan route:list → shows which middleware is applied to each route
+
+================================================================
+*/
