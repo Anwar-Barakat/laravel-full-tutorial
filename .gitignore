@@ -1,3 +1,4 @@
+solutions/
 *.log
 .DS_Store
 .env

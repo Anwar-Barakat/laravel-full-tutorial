@@ -6,11 +6,278 @@
 
 
 // ============================================================
-// tests/Feature/BookingServiceTest.php  (Mail, Queue, Event, Notification fakes)
+// tests/Feature/BookingServiceTest.php
 // ============================================================
 
+namespace Tests\Feature;
+
+use App\Events\BookingCreated;
+use App\Jobs\GenerateBookingPdfJob;
+use App\Jobs\ProcessPaymentJob;
+use App\Jobs\SendConfirmationEmailJob;
+use App\Mail\BookingConfirmationMail;
+use App\Models\Booking;
+use App\Models\School;
+use App\Models\User;
+use App\Notifications\BookingConfirmedNotification;
+use App\Services\BookingService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\Queue;
+use Tests\TestCase;
+
+class BookingServiceTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private User $admin;
+    private School $school;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->school = School::factory()->create();
+        $this->admin  = User::factory()->create([
+            'role'      => 'admin',
+            'school_id' => $this->school->id,
+        ]);
+    }
+
+    public function test_booking_confirmation_mail_and_notification_are_sent(): void
+    {
+        Mail::fake();
+        Notification::fake();
+
+        $booking = Booking::factory()->create(['school_id' => $this->school->id]);
+
+        $this->admin->notify(new BookingConfirmedNotification($booking));
+
+        Mail::assertSent(BookingConfirmationMail::class, fn($mail) =>
+            $mail->hasTo($this->admin->email)
+        );
+
+        Notification::assertSentTo($this->admin, BookingConfirmedNotification::class);
+    }
+
+    public function test_process_payment_job_is_pushed_to_queue(): void
+    {
+        Queue::fake();
+
+        $booking = Booking::factory()->create(['school_id' => $this->school->id]);
+
+        ProcessPaymentJob::dispatch($booking);
+
+        Queue::assertPushed(ProcessPaymentJob::class, fn($job) =>
+            $job->booking->id === $booking->id
+        );
+    }
+
+    public function test_booking_created_event_is_dispatched(): void
+    {
+        Event::fake();
+
+        $booking = Booking::factory()->create(['school_id' => $this->school->id]);
+
+        event(new BookingCreated($booking));
+
+        Event::assertDispatched(BookingCreated::class, fn($event) =>
+            $event->booking->id === $booking->id
+        );
+    }
+
+    public function test_booking_confirmed_notification_is_sent_to_admin(): void
+    {
+        Notification::fake();
+
+        $booking = Booking::factory()->create(['school_id' => $this->school->id]);
+
+        $this->admin->notify(new BookingConfirmedNotification($booking));
+
+        Notification::assertSentTo(
+            $this->admin,
+            BookingConfirmedNotification::class,
+            fn($notification) => $notification->booking->id === $booking->id
+        );
+    }
+
+    public function test_booking_job_chain_is_dispatched_in_order(): void
+    {
+        Bus::fake();
+
+        $booking = Booking::factory()->create(['school_id' => $this->school->id]);
+
+        Bus::chain([
+            new ProcessPaymentJob($booking),
+            new GenerateBookingPdfJob($booking),
+            new SendConfirmationEmailJob($booking),
+        ])->dispatch();
+
+        Bus::assertChained([
+            ProcessPaymentJob::class,
+            GenerateBookingPdfJob::class,
+            SendConfirmationEmailJob::class,
+        ]);
+    }
+
+    public function test_payment_gateway_mock_is_called_with_correct_amount(): void
+    {
+        $booking = Booking::factory()->create([
+            'school_id' => $this->school->id,
+            'amount'    => 5000,
+        ]);
+
+        $mock = $this->mock(\App\Contracts\PaymentGatewayInterface::class);
+
+        $mock->shouldReceive('charge')
+            ->once()
+            ->with(5000, 'AED')
+            ->andReturn(['status' => 'success']);
+
+        app(BookingService::class)->processPayment($booking);
+    }
+}
 
 
 // ============================================================
-// tests/Unit/ProcessPaymentJobTest.php  (Job in isolation)
+// tests/Unit/ProcessPaymentJobTest.php
 // ============================================================
+
+namespace Tests\Unit;
+
+use App\Exceptions\PaymentError;
+use App\Exceptions\PaymentException;
+use App\Jobs\ProcessPaymentJob;
+use App\Models\Booking;
+use App\Services\PaymentService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\TestCase;
+
+class ProcessPaymentJobTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_job_marks_booking_as_paid_on_success(): void
+    {
+        $booking = Booking::factory()->create(['status' => 'pending']);
+
+        $mock = $this->mock(PaymentService::class);
+        $mock->shouldReceive('charge')->once()->andReturn(null);
+
+        $job = new ProcessPaymentJob($booking);
+        $job->handle(app(PaymentService::class));
+
+        $this->assertDatabaseHas('bookings', [
+            'id'     => $booking->id,
+            'status' => 'paid',
+        ]);
+    }
+
+    public function test_job_marks_booking_as_failed_when_card_declined(): void
+    {
+        $booking = Booking::factory()->create(['status' => 'pending']);
+
+        $mock = $this->mock(PaymentService::class);
+        $mock->shouldReceive('charge')
+            ->once()
+            ->andThrow(new PaymentException(PaymentError::CardDeclined));
+
+        $job = new ProcessPaymentJob($booking);
+
+        try {
+            $job->handle(app(PaymentService::class));
+        } catch (PaymentException) {}
+
+        $this->assertDatabaseHas('bookings', [
+            'id'     => $booking->id,
+            'status' => 'payment_failed',
+        ]);
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+FAKE PATTERN — ALWAYS 3 STEPS
+------------------------------
+• Step 1: call fake() BEFORE the action — or assertions will miss it
+• Step 2: trigger the action (call service, dispatch job, post to endpoint)
+• Step 3: assert what was sent/dispatched/fired
+
+MAIL::FAKE()
+------------
+• Mail::fake()                                          → intercepts all mail
+• Mail::assertSent(MailClass::class)                    → mail was sent
+• Mail::assertNotSent(MailClass::class)                 → mail was NOT sent
+• Mail::assertSent(MailClass::class, fn($mail) => ...)  → with callback
+  - $mail->hasTo('email@example.com')                   → check recipient
+  - $mail->hasSubject('Booking Confirmed')              → check subject
+• only works when toMail() returns a Mailable — not a MailMessage
+
+QUEUE::FAKE()
+-------------
+• Queue::fake()                                                → intercepts all dispatches
+• Queue::assertPushed(JobClass::class)                         → job was dispatched
+• Queue::assertNotPushed(JobClass::class)                      → job was NOT dispatched
+• Queue::assertPushed(JobClass::class, fn($job) => ...)        → check job data
+  - always use === not == for ID comparisons
+
+EVENT::FAKE()
+-------------
+• Event::fake()                                                → intercepts all events
+• Event::assertDispatched(EventClass::class)                   → event was fired
+• Event::assertNotDispatched(EventClass::class)                → event was NOT fired
+• Event::assertDispatched(EventClass::class, fn($e) => ...)    → check event data
+
+NOTIFICATION::FAKE()
+--------------------
+• Notification::fake()                                         → intercepts all notifications
+• Notification::assertSentTo($user, NotifClass::class)         → sent to specific user
+• Notification::assertNotSentTo($user, NotifClass::class)
+• third arg callback: fn($notif) => $notif->booking->id === $id
+
+BUS::FAKE()
+-----------
+• Bus::fake()                                                  → intercepts all dispatches
+• Bus::assertDispatched(JobClass::class)                       → single job dispatched
+• Bus::assertChained([A::class, B::class, C::class])           → exact order matters
+• Bus::assertBatched(fn($batch) => count($batch->jobs) === 3)
+
+MOCKING — $this->mock()
+------------------------
+• $this->mock(Interface::class)      → creates mock + auto-binds in container
+• ->shouldReceive('method')          → expect this method to be called
+• ->once()                           → called exactly once
+• ->with($arg1, $arg2)               → called with these arguments
+• ->andReturn($value)                → returns this value
+• ->andThrow($exception)             → throws this exception
+
+CLOSURES IN CLASS METHODS
+--------------------------
+• $this is automatic inside closures — never put it in use()
+  - wrong:   fn($mail) use($this->admin) => ...
+  - correct: fn($mail) => $mail->hasTo($this->admin->email)
+• use() is only for local variables: fn($job) use($booking) => ...
+
+JOB TESTING IN ISOLATION
+--------------------------
+• instantiate directly: new ProcessPaymentJob($booking)
+• call handle() manually: $job->handle(app(PaymentService::class))
+• mock the dependency before calling handle()
+• assert DB state after to confirm the job did its work
+
+ARTISAN
+-------
+• php artisan make:test BookingServiceTest             → feature test stub
+• php artisan make:test ProcessPaymentJobTest --unit   → unit test stub
+• php artisan test --filter=BookingServiceTest         → run one class
+• php artisan test --filter=test_mail_is_sent          → run one method
+
+================================================================
+*/

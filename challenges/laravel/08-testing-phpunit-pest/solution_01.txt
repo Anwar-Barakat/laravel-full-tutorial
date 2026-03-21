@@ -9,8 +9,217 @@
 // database/factories/BookingFactory.php
 // ============================================================
 
+namespace Database\Factories;
+
+use App\Models\Booking;
+use App\Models\Destination;
+use App\Models\School;
+use Illuminate\Database\Eloquent\Factories\Factory;
+
+class BookingFactory extends Factory
+{
+    protected $model = Booking::class;
+
+    public function definition(): array
+    {
+        return [
+            'school_id'      => School::factory(),
+            'destination_id' => Destination::factory(),
+            'student_count'  => $this->faker->numberBetween(10, 50),
+            'amount'         => $this->faker->numberBetween(5000, 50000),
+            'status'         => $this->faker->randomElement(['pending', 'paid', 'cancelled']),
+            'trip_date'      => $this->faker->dateTimeBetween('+1 week', '+6 months')->format('Y-m-d'),
+        ];
+    }
+
+    public function pending(): static
+    {
+        return $this->state(['status' => 'pending']);
+    }
+
+    public function paid(): static
+    {
+        return $this->state(['status' => 'paid', 'paid_at' => now()]);
+    }
+
+    public function cancelled(): static
+    {
+        return $this->state(['status' => 'cancelled']);
+    }
+}
 
 
 // ============================================================
 // tests/Feature/BookingTest.php
 // ============================================================
+
+namespace Tests\Feature;
+
+use App\Models\Booking;
+use App\Models\School;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\TestCase;
+
+class BookingTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private User $admin;
+    private User $schoolUser;
+    private School $school;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->school     = School::factory()->create();
+        $this->admin      = User::factory()->create(['role' => 'admin']);
+        $this->schoolUser = User::factory()->create([
+            'role'      => 'school_admin',
+            'school_id' => $this->school->id,
+        ]);
+    }
+
+    public function test_authenticated_user_can_create_booking(): void
+    {
+        $data = Booking::factory()->make(['school_id' => $this->school->id])->toArray();
+
+        $this->actingAs($this->admin)
+            ->postJson('/api/bookings', $data)
+            ->assertCreated()
+            ->assertJsonStructure([
+                'data' => ['id', 'school_id', 'destination_id', 'student_count', 'amount', 'trip_date', 'status'],
+            ]);
+
+        $this->assertDatabaseHas('bookings', ['school_id' => $this->school->id]);
+    }
+
+    public function test_booking_creation_fails_validation(): void
+    {
+        $this->actingAs($this->admin)
+            ->postJson('/api/bookings', [])
+            ->assertUnprocessable()
+            ->assertJsonStructure([
+                'message',
+                'errors' => ['school_id', 'destination_id', 'student_count', 'trip_date'],
+            ]);
+    }
+
+    public function test_unauthenticated_user_cannot_access_bookings(): void
+    {
+        $this->getJson('/api/bookings')
+            ->assertUnauthorized();
+    }
+
+    public function test_school_admin_cannot_view_another_schools_booking(): void
+    {
+        $otherSchool  = School::factory()->create();
+        $otherBooking = Booking::factory()->create(['school_id' => $otherSchool->id]);
+
+        $this->actingAs($this->schoolUser)
+            ->getJson("/api/bookings/{$otherBooking->id}")
+            ->assertForbidden();
+    }
+
+    public function test_bookings_index_returns_paginated_response(): void
+    {
+        Booking::factory(15)->create(['school_id' => $this->school->id]);
+
+        $this->actingAs($this->admin)
+            ->getJson('/api/bookings?per_page=10')
+            ->assertOk()
+            ->assertJsonStructure([
+                'data' => [
+                    '*' => ['id', 'school_id', 'destination_id', 'student_count', 'amount', 'trip_date', 'status'],
+                ],
+                'meta'  => ['current_page', 'per_page', 'total'],
+                'links' => ['first', 'last', 'prev', 'next'],
+            ]);
+    }
+
+    public function test_booking_soft_delete_removes_from_database(): void
+    {
+        $booking = Booking::factory()->create(['school_id' => $this->school->id]);
+
+        $this->actingAs($this->admin)
+            ->deleteJson("/api/bookings/{$booking->id}")
+            ->assertNoContent();
+
+        $this->assertSoftDeleted('bookings', ['id' => $booking->id]);
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+REFRESHDATABASE TRAIT
+---------------------
+• wraps each test in a DB transaction and rolls back after
+• gives a clean slate for every test method
+• alternative: DatabaseMigrations — re-runs migrations (much slower)
+• use RefreshDatabase for all feature tests
+
+SETUP()
+-------
+• runs before every test method in the class
+• always call parent::setUp() first
+• create shared fixtures here — avoids repeating factory calls in every test
+• declare typed properties on the class for IDE autocomplete
+
+ACTINGAS()
+----------
+• $this->actingAs($user) → authenticates the user for that request
+• works with Sanctum: actingAs($user, 'sanctum')
+• chains directly onto the HTTP call: $this->actingAs($user)->postJson(...)
+• no real token needed — bypasses Sanctum token lookup in tests
+
+HTTP ASSERTION METHODS
+----------------------
+• assertCreated()       → 201
+• assertOk()            → 200
+• assertUnprocessable() → 422 validation error
+• assertUnauthorized()  → 401  ← not assertUnauthenticated()
+• assertForbidden()     → 403
+• assertNoContent()     → 204  ← not assertNotContent()
+
+DATABASE ASSERTIONS
+-------------------
+• assertDatabaseHas('table', ['col' => 'val'])     → row exists
+• assertDatabaseMissing('table', ['col' => 'val']) → row gone
+• assertSoftDeleted('table', ['id' => $id])        → deleted_at is set
+
+FACTORIES IN TESTS
+------------------
+• make()   → builds model in memory, no DB insert — use for POST $data
+• create() → inserts to DB, returns model — use when you need a real record
+• count(n) → creates N records: Booking::factory(15)->create()
+• state override: Booking::factory()->make(['school_id' => $id])
+• named states: Booking::factory()->pending()->create()
+
+ASSERTJSONSTRUCTURE — PAGINATION
+---------------------------------
+• meta and links are TOP-LEVEL keys — NOT nested inside data
+  - correct:   ['data' => ['*' => [...]], 'meta' => [...], 'links' => [...]]
+  - wrong:     ['data' => ['*' => [...], 'meta' => [...], 'links' => [...]]]
+• '*' means every item in the array must have these keys
+
+FACTORY — DATE FORMAT
+---------------------
+• $this->faker->dateTimeBetween() returns a DateTime object
+• always call ->format('Y-m-d') to get a plain string
+• plain strings work cleanly in toArray() and assertDatabaseHas()
+
+ARTISAN
+-------
+• php artisan make:factory BookingFactory --model=Booking → generates stub
+• php artisan make:test BookingTest                       → generates test class
+• php artisan test --filter=BookingTest                   → run one test class
+• php artisan test --filter=test_unauthenticated          → run one method
+• php artisan test --coverage                             → coverage report
+
+================================================================
+*/
