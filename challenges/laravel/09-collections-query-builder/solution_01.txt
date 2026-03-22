@@ -8,3 +8,150 @@
 // ============================================================
 // app/Services/BookingStatsService.php
 // ============================================================
+
+namespace App\Services;
+
+use App\Models\Booking;
+use Illuminate\Support\Collection;
+
+class BookingStatsService
+{
+    public function getDashboardStats(): array
+    {
+        return [
+            'revenue_by_school' => $this->getRevenueBySchool(),
+            'top_destinations'  => $this->getTopDestinations(),
+            'monthly_trend'     => $this->getMonthlyTrend(),
+            'summary'           => $this->getSummary(),
+        ];
+    }
+
+    public function getRevenueBySchool(): Collection
+    {
+        $bookings = Booking::with(['school', 'destination'])->get();
+
+        return $bookings
+            ->groupBy('school_id')
+            ->map(fn($group) => [
+                'school' => $group->first()->school->name,
+                'total'  => $group->sum('amount'),
+                'count'  => $group->count(),
+            ])
+            ->values();
+    }
+
+    public function getTopDestinations(): Collection
+    {
+        $bookings = Booking::with('destination')->get();
+
+        return $bookings
+            ->groupBy('destination_id')
+            ->map(fn($group) => [
+                'name'     => $group->first()->destination->name,
+                'bookings' => $group->count(),
+            ])
+            ->sortByDesc('bookings')
+            ->take(5)
+            ->values();
+    }
+
+    public function getMonthlyTrend(): Collection
+    {
+        $bookings = Booking::all();
+
+        return $bookings
+            ->filter(fn($b) => $b->trip_date->gte(now()->subMonths(6)))
+            ->groupBy(fn($b) => $b->trip_date->format('Y-m'))
+            ->map(fn($group, $month) => [
+                'month'   => $month,
+                'revenue' => $group->sum('amount'),
+            ])
+            ->sortKeys()
+            ->values();
+    }
+
+    public function getSummary(): array
+    {
+        $bookings = Booking::all();
+
+        return $bookings->pipe(fn($all) => [
+            'total_revenue' => $all->sum('amount'),
+            'total_bookings'=> $all->count(),
+            'avg_booking'   => round($all->avg('amount'), 2),
+            'total_students'=> $all->sum('student_count'),
+        ]);
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+COLLECTIONS VS QUERY BUILDER
+------------------------------
+• Collections → transform data already loaded in memory
+• Query Builder → fetch data from the database
+• load first with ->get(), then chain collection methods
+• never chain collection methods directly on a query (groupBy on Eloquent = SQL GROUP BY)
+
+GROUPBY()
+---------
+• ->groupBy('school_id')        → groups by a column value — keys become school_ids
+• ->groupBy(fn($b) => ...)      → groups by a callback — use for computed keys (month)
+• each $group is a Collection of the items that share the same key
+• $group->first()               → get one item from the group (to access relations)
+• $group->sum('amount')         → aggregate across the whole group
+• $group->count()               → number of items in the group
+
+VALUES()
+--------
+• after groupBy/filter/sortByDesc — keys become group keys (school_id, month, etc.)
+• values() resets keys back to 0, 1, 2... sequential integers
+• without values() → JSON becomes an object {} instead of an array []
+• rule: always call values() at the end of any chain that uses groupBy or filter
+
+COMMON CHAIN PATTERN
+--------------------
+• filter → groupBy → map → sortByDesc → take → values
+  - filter:      keep only what you need
+  - groupBy:     organize into groups
+  - map:         transform each group into output shape
+  - sortByDesc:  rank by a value
+  - take(n):     limit to top N
+  - values():    reset keys
+
+PIPE()
+------
+• ->pipe(fn($collection) => ...)  → pass the whole collection into a callback
+• useful for computing a summary from the full collection in one step
+• returns whatever the callback returns (array, value, etc.)
+
+SORTKEYS() VS SORTBYDESC()
+---------------------------
+• sortKeys()        → sort by the array KEY (e.g. '2026-01', '2026-02')
+• sortByDesc('col') → sort by a VALUE inside each item (e.g. 'bookings' count)
+
+WHERE() VS FILTER()
+--------------------
+• where() before get() → SQL filter — only loads matching rows into memory ✅
+  - Booking::where('trip_date', '>=', now()->subMonths(6))->get()
+• filter() after get() → PHP filter — loads ALL rows first, then discards ❌
+  - Booking::all()->filter(fn($b) => $b->trip_date->gte(...))
+• rule: always use where() for column-based filtering — use filter() only for
+  logic SQL cannot handle (computed values, relationship checks, complex conditions)
+
+NULLSAFE ON COLLECTIONS
+------------------------
+• $group?->first() → wrong — $group is always a Collection, never null
+• $group->first()  → correct — no nullsafe needed on Collection methods
+• only use ?-> on model relations that might be null: $booking->school?->name
+
+ARTISAN
+-------
+• php artisan make:service BookingStatsService → creates the class file
+• php artisan tinker → test collection chains interactively
+
+================================================================
+*/

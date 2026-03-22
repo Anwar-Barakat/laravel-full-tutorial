@@ -9,14 +9,237 @@
 // app/Models/School.php  (subquery + scopes)
 // ============================================================
 
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+
+class School extends Model
+{
+    protected $fillable = ['name', 'email', 'phone', 'address'];
+
+    public function bookings()
+    {
+        return $this->hasMany(Booking::class);
+    }
+
+    public function scopeWithLatestBookingDate(Builder $query): Builder
+    {
+        return $query->addSelect([
+            'latest_booking_at' => Booking::select('created_at')
+                ->whereColumn('school_id', 'schools.id')
+                ->latest()
+                ->limit(1),
+        ]);
+    }
+
+    public function scopeWithPaidCount(Builder $query): Builder
+    {
+        return $query->withCount([
+            'bookings as paid_bookings_count' => fn($q) => $q->where('status', 'paid'),
+        ]);
+    }
+
+    public function scopeHasMinPaidBookings(Builder $query, int $min = 5): Builder
+    {
+        return $query->whereHas('bookings', fn($q) => $q->where('status', 'paid'), '>=', $min);
+    }
+}
 
 
 // ============================================================
 // app/Models/Booking.php  (scopes + chunking)
 // ============================================================
 
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+class Booking extends Model
+{
+    use SoftDeletes;
+
+    protected $fillable = ['school_id', 'destination_id', 'student_count', 'amount', 'status', 'trip_date'];
+
+    public function school()
+    {
+        return $this->belongsTo(School::class);
+    }
+
+    public function destination()
+    {
+        return $this->belongsTo(Destination::class);
+    }
+
+    public function scopePaid(Builder $query): Builder
+    {
+        return $query->where('status', 'paid');
+    }
+
+    public function scopePending(Builder $query): Builder
+    {
+        return $query->where('status', 'pending');
+    }
+
+    public function scopeForSchool(Builder $query, int $schoolId): Builder
+    {
+        return $query->where('school_id', $schoolId);
+    }
+
+    public function scopeUpcoming(Builder $query): Builder
+    {
+        return $query->where('trip_date', '>', now());
+    }
+
+    public static function processOldPending(\Closure $callback): void
+    {
+        static::pending()
+            ->where('created_at', '<', now()->subDays(30))
+            ->chunkById(100, $callback);
+    }
+
+    public static function cursorForExport(): \Illuminate\Support\LazyCollection
+    {
+        return static::paid()
+            ->with('school')
+            ->cursor();
+    }
+}
 
 
 // ============================================================
 // app/Http/Controllers/SchoolController.php  (conditional eager loading + when())
 // ============================================================
+
+namespace App\Http\Controllers;
+
+use App\Models\School;
+use Illuminate\Http\Request;
+
+class SchoolController extends Controller
+{
+    public function index(Request $request)
+    {
+        $schools = School::query()
+            ->withLatestBookingDate()
+            ->withPaidCount()
+            ->when($request->boolean('active_only'), fn($q) => $q->hasMinPaidBookings(1))
+            ->when($request->filled('search'), fn($q) => $q->where('name', 'like', '%' . $request->search . '%'))
+            ->when($request->filled('min_bookings'), fn($q) => $q->hasMinPaidBookings((int) $request->min_bookings))
+            ->with($this->resolveWith($request))
+            ->paginate($request->integer('per_page', 15));
+
+        return response()->json($schools);
+    }
+
+    public function show(Request $request, School $school)
+    {
+        $relations = $this->resolveWith($request);
+
+        if (in_array('bookings', $relations)) {
+            $school->load([
+                'bookings' => fn($q) => $q->paid()->latest()->limit(10),
+            ]);
+        }
+
+        return response()->json($school);
+    }
+
+    private function resolveWith(Request $request): array
+    {
+        $allowed = ['bookings', 'destination', 'payments'];
+        $include = explode(',', $request->string('include')->toString());
+
+        return array_intersect($include, $allowed);
+    }
+
+    public function rawStats()
+    {
+        return School::selectRaw('
+            schools.id,
+            schools.name,
+            COUNT(bookings.id)          AS total_bookings,
+            SUM(bookings.amount)        AS total_revenue,
+            AVG(bookings.student_count) AS avg_students,
+            MAX(bookings.trip_date)     AS latest_trip
+        ')
+        ->leftJoin('bookings', 'bookings.school_id', '=', 'schools.id')
+        ->where('bookings.status', 'paid')
+        ->groupBy('schools.id', 'schools.name')
+        ->orderByDesc('total_revenue')
+        ->get();
+    }
+}
+
+
+================================================================
+TIPS
+================================================================
+
+SUBQUERY SELECTS
+----------------
+- addSelect(['col' => SubQuery]) → fetches a single value per row via subquery
+- avoids N+1: one query with correlated subquery instead of N queries
+- the subquery must return exactly one row/column
+- use whereColumn('fk', 'parent_table.id') to correlate to parent
+
+SELECTRAW
+---------
+- selectRaw('expr AS alias, ...') → write raw SQL expressions in the SELECT clause
+- replaces the entire SELECT — you control every column listed
+- use for aggregates: COUNT, SUM, AVG, MAX, MIN
+- use for expressions: YEAR(), CONCAT(), CASE WHEN, COALESCE(), DATEDIFF()
+- usually paired with ->join() + ->groupBy() for report/stats queries
+- aliases become model properties: SUM(amount) AS revenue → $model->revenue
+- never concatenate user input — use bindings instead:
+    selectRaw('SUM(CASE WHEN amount > ? THEN 1 ELSE 0 END) AS big', [$val])
+
+selectRaw vs addSelect
+- selectRaw  → replaces SELECT, used for aggregation + groupBy (stats/reports)
+- addSelect  → appends one correlated subquery column, no groupBy needed (per-row value)
+
+WHEREHAS VS JOIN
+----------------
+- whereHas('relation', $callback)          → filter by relation existence
+- whereHas('relation', $callback, '>=', 5) → filter by count
+- withCount(['relation as alias' => $cb])  → add count as computed column
+- for pure filtering: whereHas — cleaner, no extra SELECT
+- for ordering/selecting the count: withCount or JOIN
+
+CHUNKBYID VS CHUNK
+------------------
+- chunk(100, fn)     → uses OFFSET — scans from row 0 on every page,
+                       slow on large tables, unsafe if records are modified mid-loop
+- chunkById(100, fn) → uses WHERE id > last_id — jumps straight to the next
+                       batch from the last seen ID, much faster, safe to modify
+                       or delete records mid-loop; best choice for large tables
+- cursor()           → streams one row at a time from a single open query —
+                       lowest memory possible, no chunking overhead;
+                       read-only: never modify records while iterating
+
+- chunk     → small tables (<10k rows) or quick read-only scripts
+- chunkById → large tables, write operations (update/delete mid-loop)
+- cursor    → large read-only exports (CSV, JSON) where memory matters
+
+WHEN() DYNAMIC QUERIES
+-----------------------
+- ->when($condition, fn($q) => $q->where(...))
+- condition can be any truthy value: bool, string, int
+- when() short-circuits — callback only runs when condition is truthy
+- avoids if/else blocks cluttering query construction
+
+SCOPES
+------
+- local scope:  scopeName($query, ...) → called as ->name() on query
+- global scope: applies to every query on the model — use sparingly
+- combine scopes: ->paid()->upcoming()->forSchool(1) → clean chaining
+
+ARTISAN
+-------
+- php artisan make:model School -m    → model + migration
+- php artisan make:scope ActiveScope  → global scope stub
+- php artisan tinker                  → test queries interactively
+
+================================================================
