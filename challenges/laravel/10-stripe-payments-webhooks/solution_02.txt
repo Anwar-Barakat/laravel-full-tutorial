@@ -1,28 +1,670 @@
 <?php
 
 // ============================================================
-// Problem 02 — Stripe Webhook Handler
+// Problem 01 + 02 — Stripe Checkout, Webhooks & Refunds
 // ============================================================
+
+
+// ============================================================
+// config/services.php
+// ============================================================
+
+return [
+    'stripe' => [
+        'key'            => env('STRIPE_KEY'),
+        'secret'         => env('STRIPE_SECRET'),
+        'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
+    ],
+];
+
+
+// ============================================================
+// app/Http/Controllers/PaymentController.php
+// ============================================================
+
+namespace App\Http\Controllers;
+
+use App\Models\Booking;
+use App\Models\Payment;
+use App\Models\User;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Stripe\Customer;
+use Stripe\Exception\ApiErrorException;
+use Stripe\PaymentIntent;
+use Stripe\Refund;
+use Stripe\Stripe;
+
+class PaymentController extends Controller
+{
+    public function __construct()
+    {
+        Stripe::setApiKey(config('services.stripe.secret'));
+    }
+
+    // ----------------------------------------------------------
+    // Step 1 — create PaymentIntent
+    // POST /bookings/{booking}/pay
+    // ----------------------------------------------------------
+
+    public function createIntent(Booking $booking): JsonResponse
+    {
+        $this->authorize('update', $booking);
+
+        try {
+            $customerId = $this->resolveCustomer($booking->school->user);
+
+            $intent = PaymentIntent::create(
+                [
+                    'amount'             => $booking->amount * 100,
+                    'currency'           => 'aed',
+                    'customer'           => $customerId,
+                    'receipt_email'      => $booking->school->user->email,
+                    'setup_future_usage' => 'off_session',
+                    'metadata'           => [
+                        'booking_id' => $booking->id,
+                        'reference'  => $booking->reference,
+                        'school_id'  => $booking->school_id,
+                    ],
+                ],
+                [
+                    'idempotency_key' => 'booking:' . $booking->id,
+                ]
+            );
+
+            Payment::create([
+                'booking_id'            => $booking->id,
+                'stripe_payment_intent' => $intent->id,
+                'amount'                => $booking->amount,
+                'status'                => 'pending',
+            ]);
+
+            return response()->json([
+                'client_secret'     => $intent->client_secret,
+                'payment_intent_id' => $intent->id,
+                'amount'            => $booking->amount,
+                'currency'          => 'aed',
+            ]);
+
+        } catch (ApiErrorException $e) {
+            \Log::error('Stripe createIntent failed', [
+                'error'      => $e->getMessage(),
+                'booking_id' => $booking->id,
+            ]);
+
+            return response()->json(['error' => $e->getMessage()], 422);
+        }
+    }
+
+    // ----------------------------------------------------------
+    // Step 3 — confirm payment after Stripe.js completes
+    // POST /bookings/{booking}/confirm
+    // Updates DB immediately for instant frontend feedback.
+    // The webhook also handles this as a safety net — both are
+    // idempotent so updating twice causes no harm.
+    // ----------------------------------------------------------
+
+    public function confirm(Request $request, Booking $booking): JsonResponse
+    {
+        $request->validate([
+            'payment_intent_id' => ['required', 'string'],
+        ]);
+
+        $this->authorize('update', $booking);
+
+        try {
+            $intent = PaymentIntent::retrieve($request->payment_intent_id);
+
+            if ($intent->status === 'succeeded') {
+                // Update DB here for immediate UX response.
+                // The webhook will also fire and skip this if already paid.
+                $booking->update(['status' => 'paid', 'paid_at' => now()]);
+
+                Payment::where('stripe_payment_intent', $intent->id)
+                    ->update(['status' => 'succeeded', 'paid_at' => now()]);
+
+                return response()->json([
+                    'message' => 'Payment confirmed',
+                    'booking' => $booking,
+                ]);
+            }
+
+            return response()->json([
+                'message' => 'Payment not yet complete',
+                'status'  => $intent->status,
+            ], 202);
+
+        } catch (ApiErrorException $e) {
+            \Log::error('Stripe confirm failed', [
+                'error'      => $e->getMessage(),
+                'booking_id' => $booking->id,
+            ]);
+
+            return response()->json(['error' => 'Payment confirmation failed'], 422);
+        }
+    }
+
+    // ----------------------------------------------------------
+    // Refund — initiate refund via Stripe API
+    // POST /bookings/{booking}/refund
+    // DB is NOT updated here — Refund::create() returns "accepted",
+    // not "done". Money moves asynchronously. Wait for the
+    // charge.refunded webhook to confirm before updating DB.
+    // ----------------------------------------------------------
+
+    public function refund(Booking $booking): JsonResponse
+    {
+        $this->authorize('update', $booking);
+
+        $payment = Payment::where('booking_id', $booking->id)
+            ->where('status', 'succeeded')
+            ->firstOrFail();
+
+        try {
+            Refund::create([
+                'payment_intent' => $payment->stripe_payment_intent,
+            ]);
+
+            return response()->json(['message' => 'Refund initiated']);
+
+        } catch (ApiErrorException $e) {
+            \Log::error('Stripe refund failed', [
+                'error'      => $e->getMessage(),
+                'booking_id' => $booking->id,
+            ]);
+
+            return response()->json(['error' => $e->getMessage()], 422);
+        }
+    }
+
+    // ----------------------------------------------------------
+    // Retrieve Stripe customer + their PaymentIntents + trips
+    // GET /users/{user}/customer
+    // ----------------------------------------------------------
+
+    public function getCustomer(User $user): JsonResponse
+    {
+        if (! $user->payment_customer_id) {
+            return response()->json(['error' => 'No Stripe customer found for this user'], 404);
+        }
+
+        try {
+            $customer = Customer::retrieve($user->payment_customer_id);
+
+            $intents = PaymentIntent::all([
+                'customer' => $user->payment_customer_id,
+                'limit'    => 20,
+            ]);
+
+            $trips = Booking::where('school_id', $user->school->id)
+                ->with('destination')
+                ->orderByDesc('created_at')
+                ->get()
+                ->map(fn($booking) => [
+                    'booking_id'  => $booking->id,
+                    'reference'   => $booking->reference,
+                    'destination' => $booking->destination->name,
+                    'trip_date'   => $booking->trip_date,
+                    'amount'      => $booking->amount,
+                    'status'      => $booking->status,
+                ]);
+
+            return response()->json([
+                'customer' => [
+                    'id'    => $customer->id,
+                    'name'  => $customer->name,
+                    'email' => $customer->email,
+                ],
+                'payment_intents' => collect($intents->data)->map(fn($intent) => [
+                    'id'       => $intent->id,
+                    'amount'   => $intent->amount / 100,
+                    'currency' => strtoupper($intent->currency),
+                    'status'   => $intent->status,
+                    'created'  => \Carbon\Carbon::createFromTimestamp($intent->created)->toDateTimeString(),
+                ]),
+                'trips' => $trips,
+            ]);
+
+        } catch (ApiErrorException $e) {
+            \Log::error('Stripe getCustomer failed', [
+                'error'   => $e->getMessage(),
+                'user_id' => $user->id,
+            ]);
+
+            return response()->json(['error' => 'Failed to retrieve customer data'], 422);
+        }
+    }
+
+    // ----------------------------------------------------------
+    // Private — create Stripe Customer once, reuse forever
+    // ----------------------------------------------------------
+
+    private function resolveCustomer(User $user): string
+    {
+        if ($user->payment_customer_id) {
+            return $user->payment_customer_id;
+        }
+
+        $customer = Customer::create([
+            'name'     => $user->name,
+            'email'    => $user->email,
+            'metadata' => ['user_id' => $user->id],
+        ]);
+
+        $user->update(['payment_customer_id' => $customer->id]);
+
+        return $customer->id;
+    }
+}
 
 
 // ============================================================
 // app/Http/Controllers/StripeWebhookController.php
 // ============================================================
 
+namespace App\Http\Controllers;
+
+use App\Jobs\HandleStripeEvent;
+use App\Models\StripeEvent;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Stripe\Exception\SignatureVerificationException;
+use Stripe\Webhook;
+
+class StripeWebhookController extends Controller
+{
+    public function handle(Request $request): JsonResponse
+    {
+        $payload   = $request->getContent();
+        $signature = $request->header('Stripe-Signature');
+
+        try {
+            $event = Webhook::constructEvent(
+                $payload,
+                $signature,
+                config('services.stripe.webhook_secret')
+            );
+        } catch (SignatureVerificationException $e) {
+            return response()->json(['error' => 'Invalid signature'], 400);
+        }
+
+        if (StripeEvent::where('stripe_event_id', $event->id)->exists()) {
+            return response()->json(['message' => 'Already processed'], 200);
+        }
+
+        StripeEvent::create([
+            'stripe_event_id' => $event->id,
+            'type'            => $event->type,
+            'payload'         => $event->toArray(),
+            'processed_at'    => null,
+        ]);
+
+        HandleStripeEvent::dispatch($event->id, $event->type, $event->data->object->toArray());
+
+        return response()->json(['message' => 'Received'], 200);
+    }
+}
 
 
 // ============================================================
-// app/Jobs/HandleStripeEvent.php  (queued processing)
+// app/Jobs/HandleStripeEvent.php
 // ============================================================
 
+namespace App\Jobs;
+
+use App\Models\Booking;
+use App\Models\Payment;
+use App\Models\StripeEvent;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+
+class HandleStripeEvent implements ShouldQueue
+{
+    use Queueable, InteractsWithQueue, SerializesModels;
+
+    public int $tries = 3;
+
+    public function __construct(
+        public readonly string $stripeEventId,
+        public readonly string $eventType,
+        public readonly array  $object,
+    ) {}
+
+    public function handle(): void
+    {
+        match ($this->eventType) {
+            'payment_intent.succeeded'      => $this->handlePaymentSucceeded(),
+            'payment_intent.payment_failed' => $this->handlePaymentFailed(),
+            'charge.refunded'               => $this->handleRefund(),
+            default                         => null,
+        };
+
+        StripeEvent::where('stripe_event_id', $this->stripeEventId)
+            ->update(['processed_at' => now()]);
+    }
+
+    // ----------------------------------------------------------
+    // payment_intent.succeeded
+    // data->object = PaymentIntent
+    // Safety net for cases where confirm() was never called
+    // (user closed browser after Stripe.js completed).
+    // Guard: skip if booking is already paid — confirm() got here first.
+    // ----------------------------------------------------------
+
+    private function handlePaymentSucceeded(): void
+    {
+        $intentId  = $this->object['id'];
+        $bookingId = $this->object['metadata']['booking_id'] ?? null;
+
+        if (! $bookingId) {
+            \Log::warning('Stripe webhook: no booking_id in metadata', ['intent' => $intentId]);
+            return;
+        }
+
+        $booking = Booking::find($bookingId);
+
+        if (! $booking) {
+            \Log::warning('Stripe webhook: booking not found', ['booking_id' => $bookingId]);
+            return;
+        }
+
+        // Guard — confirm() may have already updated this booking
+        if ($booking->status === 'paid') {
+            return;
+        }
+
+        $booking->update(['status' => 'paid', 'paid_at' => now()]);
+
+        Payment::where('stripe_payment_intent', $intentId)
+            ->update(['status' => 'succeeded', 'paid_at' => now()]);
+    }
+
+    // ----------------------------------------------------------
+    // payment_intent.payment_failed
+    // data->object = PaymentIntent
+    // confirm() returns 'not yet complete' for failed payments —
+    // the webhook is the only place that records the failure reason.
+    // ----------------------------------------------------------
+
+    private function handlePaymentFailed(): void
+    {
+        $intentId = $this->object['id'];
+        $reason   = $this->object['last_payment_error']['message'] ?? 'Unknown error';
+
+        Payment::where('stripe_payment_intent', $intentId)
+            ->update(['status' => 'failed', 'failure_reason' => $reason]);
+
+        \Log::error('Stripe payment failed', ['intent' => $intentId, 'reason' => $reason]);
+    }
+
+    // ----------------------------------------------------------
+    // charge.refunded
+    // data->object = Charge (NOT a PaymentIntent)
+    // DB update lives here and NOT in refund() because
+    // Refund::create() returns "accepted", not "done" — the money
+    // moves asynchronously. This webhook fires only after Stripe
+    // confirms the refund actually happened.
+    // booking_id is on the PaymentIntent metadata, not the Charge —
+    // navigate via $charge['payment_intent'] to find the payment.
+    // ----------------------------------------------------------
+
+    private function handleRefund(): void
+    {
+        $intentId = $this->object['payment_intent'] ?? null;
+
+        if (! $intentId) {
+            \Log::warning('charge.refunded: no payment_intent on charge', $this->object);
+            return;
+        }
+
+        $payment = Payment::where('stripe_payment_intent', $intentId)->first();
+
+        if (! $payment) {
+            \Log::warning('charge.refunded: payment not found', ['intent' => $intentId]);
+            return;
+        }
+
+        $payment->update(['status' => 'refunded']);
+        $payment->booking->update(['status' => 'refunded']);
+    }
+}
 
 
 // ============================================================
-// database/migrations/xxxx_create_stripe_events_table.php  (idempotency)
+// app/Models/Payment.php
 // ============================================================
 
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+class Payment extends Model
+{
+    use SoftDeletes;
+
+    protected $fillable = [
+        'booking_id',
+        'stripe_payment_intent',
+        'amount',
+        'status',
+        'paid_at',
+        'failure_reason',
+    ];
+
+    protected $casts = [
+        'paid_at' => 'datetime',
+    ];
+
+    public function booking()
+    {
+        return $this->belongsTo(Booking::class);
+    }
+}
 
 
 // ============================================================
-// routes/api.php  (no auth middleware on webhook route)
+// app/Models/User.php  (additions only)
 // ============================================================
+
+// Add to $fillable:
+//   'payment_customer_id',
+
+// Add migration:
+//   $table->string('payment_customer_id')->nullable();
+
+
+// ============================================================
+// database/migrations/xxxx_create_stripe_events_table.php
+// ============================================================
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('stripe_events', function (Blueprint $table) {
+            $table->id();
+            $table->string('stripe_event_id')->unique();
+            $table->string('type');
+            $table->json('payload');
+            $table->timestamp('processed_at')->nullable();
+            $table->timestamps();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('stripe_events');
+    }
+};
+
+
+// ============================================================
+// routes/api.php
+// ============================================================
+
+use App\Http\Controllers\PaymentController;
+use App\Http\Controllers\StripeWebhookController;
+
+// Your users call these — protected by Sanctum auth
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/bookings/{booking}/pay',     [PaymentController::class, 'createIntent']);
+    Route::post('/bookings/{booking}/confirm', [PaymentController::class, 'confirm']);
+    Route::post('/bookings/{booking}/refund',  [PaymentController::class, 'refund']);
+    Route::get('/users/{user}/customer',       [PaymentController::class, 'getCustomer']);
+});
+
+// Stripe calls this — no auth, security via signature verification
+Route::post('/stripe/webhook', [StripeWebhookController::class, 'handle'])
+    ->withoutMiddleware(['auth:sanctum', 'throttle:api']);
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+FULL FLOW SUMMARY
+-----------------
+Step 1  POST /bookings/{id}/pay
+        → resolveCustomer() creates or reuses Stripe Customer
+        → PaymentIntent::create() returns client_secret + intent id
+        → Payment record created with status = pending
+
+Step 2  Frontend calls stripe.confirmCardPayment(client_secret)
+        → Stripe.js handles card input and 3DS
+        → never confirm the intent server-side
+
+Step 3  POST /bookings/{id}/confirm  { payment_intent_id }
+        → server retrieves intent, checks status === 'succeeded'
+        → updates booking + payment immediately for instant UX
+        → webhook also fires as safety net and skips if already paid
+
+Refund  POST /bookings/{id}/refund
+        → Refund::create() tells Stripe to process — returns "accepted"
+        → DB NOT updated here — money not moved yet
+        → Stripe fires charge.refunded webhook after confirming
+        → HandleStripeEvent@handleRefund updates booking + payment
+
+WHERE DB UPDATES LIVE — THE RULE
+----------------------------------
+- confirm() updates DB immediately → frontend gets instant feedback
+  webhook also fires → guard skips update if booking already paid
+  both are safe because the updates are idempotent
+
+- refund() does NOT update DB → Refund::create() is "accepted" not "done"
+  money moves asynchronously on Stripe's side
+  charge.refunded webhook fires only when refund is confirmed
+  that is the only safe moment to mark booking as refunded
+  if you update in refund() and Stripe later rejects the refund,
+  your DB says refunded but customer never got their money back
+
+- payment_failed has no controller equivalent → webhook is the only
+  place that records the failure reason from last_payment_error
+
+Decision rule:
+  Stripe gives final status instantly in same request → controller updates DB
+  Stripe processes asynchronously, confirms later   → webhook updates DB only
+
+WEBHOOK FLOW
+------------
+- Stripe POST /stripe/webhook (no auth — Stripe's servers call this)
+- $payload   = $request->getContent()  ← raw body, NOT $request->all()
+- $signature = $request->header('Stripe-Signature')
+- must use getContent() because Stripe signed the exact raw bytes —
+  $request->all() re-serializes the JSON and breaks the signature check
+- Stripe-Signature header: 't=1712345678,v1=abc123...'
+  computed using HMAC-SHA256 of (timestamp + raw payload + webhook_secret)
+- constructEvent() recomputes signature and throws if mismatch
+- store stripe_event_id (UNIQUE) before processing — idempotency guard
+- dispatch job immediately and return 200 — Stripe has a 30s timeout
+- Stripe retries on 4xx / 5xx / timeout
+
+$event->data->object IS NOT ALWAYS A PAYMENTINTENT
+----------------------------------------------------
+- data->object is whatever Stripe object triggered the event
+- payment_intent.succeeded  → data->object = PaymentIntent
+- payment_intent.failed     → data->object = PaymentIntent
+- charge.refunded           → data->object = Charge (different shape)
+- customer.created          → data->object = Customer
+- invoice.paid              → data->object = Invoice
+- always check event type before reading fields from data->object
+
+REFUND — TWO SEPARATE STEPS
+----------------------------
+- Step 1 — your server initiates:
+    POST /bookings/{id}/refund → Refund::create(['payment_intent' => $id])
+    Stripe returns "accepted" — money not moved yet — do NOT update DB
+- Step 2 — Stripe confirms via webhook:
+    charge.refunded fires after refund is actually processed
+    data->object = Charge, NOT PaymentIntent
+    booking_id metadata lives on the PaymentIntent, not the Charge
+    get PaymentIntent id from $charge['payment_intent'], find the
+    Payment record, then update booking + payment status to refunded
+
+CUSTOMER
+--------
+- resolveCustomer() — create once per user, reuse forever
+- store id in users.payment_customer_id
+- pass 'customer' to every PaymentIntent::create()
+- 'setup_future_usage' => 'off_session' saves card for repeat payments
+- 'receipt_email' triggers automatic Stripe receipts
+- Customer::retrieve($id) — fetch customer object from Stripe
+- PaymentIntent::all(['customer' => $id]) — all payments for that customer
+
+AMOUNT IN CENTS
+---------------
+- Stripe always works in the smallest currency unit
+- AED 500 = 50000 fils → pass 50000 to Stripe, not 500
+- multiply by 100 before sending, divide by 100 when displaying
+- store the original amount in your DB, not the Stripe cents value
+
+IDEMPOTENCY
+-----------
+- pass idempotency_key to PaymentIntent::create() to prevent duplicate charges:
+    PaymentIntent::create([...], ['idempotency_key' => 'booking:' . $booking->id])
+- Stripe returns the same PaymentIntent for duplicate keys
+- stripe_events table with UNIQUE stripe_event_id prevents double-processing
+  webhooks — Stripe delivers at-least-once, not exactly-once
+
+NO AUTH ON WEBHOOK ROUTE
+-------------------------
+- webhook calls come from Stripe's servers, not your logged-in users
+- ->withoutMiddleware(['auth:sanctum', 'throttle:api'])
+- security comes from signature verification — not token auth
+- never put the webhook route behind auth middleware
+
+QUEUE CONFIGURATION
+-------------------
+- always use ShouldQueue for webhook jobs
+- set $tries = 3 for automatic retry on transient failures
+- use a dedicated 'stripe' queue so webhook jobs don't block other work
+- handle missing models gracefully — booking may be deleted between
+  event delivery and job processing
+
+CONFIG STRUCTURE
+----------------
+- config/services.php          → third-party API keys
+- env('STRIPE_KEY')            → publishable key (safe for frontend)
+- env('STRIPE_SECRET')         → secret key (server only — never expose)
+- env('STRIPE_WEBHOOK_SECRET') → webhook signing secret
+
+ARTISAN
+-------
+- composer require stripe/stripe-php
+- php artisan make:controller PaymentController
+- php artisan make:controller StripeWebhookController
+- php artisan make:job HandleStripeEvent
+- php artisan make:model Payment -m
+- php artisan make:migration create_stripe_events_table
+- php artisan make:migration add_payment_customer_id_to_users_table
+- stripe listen --forward-to localhost:8000/api/stripe/webhook
+
+================================================================
+*/

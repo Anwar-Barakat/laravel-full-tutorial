@@ -1,4 +1,4 @@
-# Stripe Payment Integration
+ # Stripe Payment Integration
 
 Integrate Stripe payments end-to-end: create payment intents, handle webhooks, manage subscriptions — your real Tripz experience.
 

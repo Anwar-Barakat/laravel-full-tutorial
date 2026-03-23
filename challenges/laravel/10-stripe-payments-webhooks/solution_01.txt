@@ -9,20 +9,337 @@
 // config/services.php  (Stripe keys)
 // ============================================================
 
+return [
+    // ...existing services...
+
+    'stripe' => [
+        'key'            => env('STRIPE_KEY'),
+        'secret'         => env('STRIPE_SECRET'),
+        'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
+    ],
+];
 
 
 // ============================================================
 // app/Http/Controllers/PaymentController.php
 // ============================================================
 
+namespace App\Http\Controllers;
+
+use App\Models\Booking;
+use App\Models\Payment;
+use App\Models\User;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Stripe\Customer;
+use Stripe\Exception\ApiErrorException;
+use Stripe\PaymentIntent;
+use Stripe\Stripe;
+
+class PaymentController extends Controller
+{
+    public function __construct()
+    {
+        Stripe::setApiKey(config('services.stripe.secret'));
+    }
+
+    // ----------------------------------------------------------
+    // Create PaymentIntent — Step 1 of the checkout flow
+    // ----------------------------------------------------------
+
+    public function createIntent(Booking $booking): JsonResponse
+    {
+        $this->authorize('update', $booking);
+
+        try {
+            $customerId = $this->resolveCustomer($booking->school->user);
+
+            $intent = PaymentIntent::create(
+                [
+                    'amount'             => $booking->amount * 100,
+                    'currency'           => 'aed',
+                    'customer'           => $customerId,
+                    'receipt_email'      => $booking->school->user->email,
+                    'setup_future_usage' => 'off_session',
+                    'metadata'           => [
+                        'booking_id' => $booking->id,
+                        'reference'  => $booking->reference,
+                        'school_id'  => $booking->school_id,
+                    ],
+                ],
+                [
+                    'idempotency_key' => 'booking:' . $booking->id,
+                ]
+            );
+
+            Payment::create([
+                'booking_id'            => $booking->id,
+                'stripe_payment_intent' => $intent->id,
+                'amount'                => $booking->amount,
+                'status'                => 'pending',
+            ]);
+
+            return response()->json([
+                'client_secret'     => $intent->client_secret,
+                'payment_intent_id' => $intent->id,
+                'amount'            => $booking->amount,
+                'currency'          => 'aed',
+            ]);
+
+        } catch (ApiErrorException $e) {
+            \Log::error('Stripe createIntent failed', [
+                'error'      => $e->getMessage(),
+                'booking_id' => $booking->id,
+            ]);
+
+            return response()->json(['error' => $e->getMessage()], 422);
+        }
+    }
+
+    // ----------------------------------------------------------
+    // Confirm payment — Step 3 of the checkout flow
+    // Called by the frontend after Stripe.js completes payment
+    // ----------------------------------------------------------
+
+    public function confirm(Request $request, Booking $booking): JsonResponse
+    {
+        $request->validate([
+            'payment_intent_id' => ['required', 'string'],
+        ]);
+
+        $this->authorize('update', $booking);
+
+        try {
+            $intent = PaymentIntent::retrieve($request->payment_intent_id);
+
+            if ($intent->status === 'succeeded') {
+                $booking->update(['status' => 'paid', 'paid_at' => now()]);
+
+                Payment::where('stripe_payment_intent', $intent->id)
+                    ->update(['status' => 'succeeded']);
+
+                return response()->json([
+                    'message' => 'Payment confirmed',
+                    'booking' => $booking,
+                ]);
+            }
+
+            return response()->json([
+                'message' => 'Payment not yet complete',
+                'status'  => $intent->status,
+            ], 202);
+
+        } catch (ApiErrorException $e) {
+            \Log::error('Stripe confirm failed', [
+                'error'      => $e->getMessage(),
+                'booking_id' => $booking->id,
+            ]);
+
+            return response()->json(['error' => 'Payment confirmation failed'], 422);
+        }
+    }
+
+    // ----------------------------------------------------------
+    // Retrieve Stripe customer — with all their PaymentIntents
+    // ----------------------------------------------------------
+
+    public function getCustomer(User $user): JsonResponse
+    {
+        if (! $user->payment_customer_id) {
+            return response()->json(['error' => 'No Stripe customer found for this user'], 404);
+        }
+
+        try {
+            $customer = Customer::retrieve($user->payment_customer_id);
+
+            $intents = PaymentIntent::all([
+                'customer' => $user->payment_customer_id,
+                'limit'    => 20,
+            ]);
+
+            $trips = Booking::where('school_id', $user->school->id)
+                ->with('destination')
+                ->orderByDesc('created_at')
+                ->get()
+                ->map(fn($booking) => [
+                    'booking_id'  => $booking->id,
+                    'reference'   => $booking->reference,
+                    'destination' => $booking->destination->name,
+                    'trip_date'   => $booking->trip_date,
+                    'amount'      => $booking->amount,
+                    'status'      => $booking->status,
+                ]);
+
+            return response()->json([
+                'customer' => [
+                    'id'    => $customer->id,
+                    'name'  => $customer->name,
+                    'email' => $customer->email,
+                ],
+                'payment_intents' => collect($intents->data)->map(fn($intent) => [
+                    'id'       => $intent->id,
+                    'amount'   => $intent->amount / 100,
+                    'currency' => strtoupper($intent->currency),
+                    'status'   => $intent->status,
+                    'created'  => \Carbon\Carbon::createFromTimestamp($intent->created)->toDateTimeString(),
+                ]),
+                'trips' => $trips,
+            ]);
+
+        } catch (ApiErrorException $e) {
+            \Log::error('Stripe getCustomer failed', [
+                'error'   => $e->getMessage(),
+                'user_id' => $user->id,
+            ]);
+
+            return response()->json(['error' => 'Failed to retrieve customer data'], 422);
+        }
+    }
+
+    // ----------------------------------------------------------
+    // Private — resolve or create a Stripe customer for a user
+    // ----------------------------------------------------------
+
+    private function resolveCustomer(User $user): string
+    {
+        if ($user->payment_customer_id) {
+            return $user->payment_customer_id;
+        }
+
+        $customer = Customer::create([
+            'name'     => $user->name,
+            'email'    => $user->email,
+            'metadata' => ['user_id' => $user->id],
+        ]);
+
+        $user->update(['payment_customer_id' => $customer->id]);
+
+        return $customer->id;
+    }
+}
 
 
 // ============================================================
 // app/Models/Payment.php
 // ============================================================
 
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+class Payment extends Model
+{
+    use SoftDeletes;
+
+    protected $fillable = [
+        'booking_id',
+        'stripe_payment_intent',
+        'amount',
+        'status',
+        'paid_at',
+        'failure_reason',
+    ];
+
+    protected $casts = [
+        'paid_at' => 'datetime',
+    ];
+
+    public function booking()
+    {
+        return $this->belongsTo(Booking::class);
+    }
+}
+
+
+// ============================================================
+// app/Models/User.php  (add to existing model)
+// ============================================================
+
+// Add to $fillable:
+//   'payment_customer_id',
+
+// Add migration:
+//   $table->string('payment_customer_id')->nullable();
 
 
 // ============================================================
 // routes/api.php
 // ============================================================
+
+use App\Http\Controllers\PaymentController;
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/bookings/{booking}/pay',      [PaymentController::class, 'createIntent']);
+    Route::post('/bookings/{booking}/confirm',  [PaymentController::class, 'confirm']);
+    Route::get('/users/{user}/customer',        [PaymentController::class, 'getCustomer']);
+});
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+STRIPE PAYMENT INTENT FLOW
+---------------------------
+- Step 1: POST /bookings/{id}/pay
+          server creates Customer (if new) + PaymentIntent
+          returns client_secret + payment_intent_id to frontend
+- Step 2: frontend calls stripe.confirmCardPayment(client_secret)
+          Stripe.js handles card input and 3DS — never do this server-side
+- Step 3: frontend calls POST /bookings/{id}/confirm with payment_intent_id
+          server retrieves the intent, checks status === 'succeeded'
+          updates booking + payment record
+
+CUSTOMER
+--------
+- resolveCustomer() — create once per user, reuse forever
+- store stripe customer id in users.payment_customer_id
+- always pass 'customer' to PaymentIntent::create() — links payment in dashboard
+- Customer::retrieve($id) — fetch customer object from Stripe
+- PaymentIntent::all(['customer' => $id]) — all payments for that customer
+
+AMOUNT IN CENTS
+---------------
+- Stripe always works in the smallest currency unit
+- AED 500 = 50000 fils → pass 50000 to Stripe, not 500
+- multiply by 100 before sending, divide by 100 when displaying
+- store the original amount in your DB, not the Stripe cents value
+
+IDEMPOTENCY
+-----------
+- pass idempotency_key to prevent duplicate charges on retry:
+  PaymentIntent::create([...], ['idempotency_key' => 'booking:' . $booking->id])
+- Stripe returns the same PaymentIntent on duplicate requests with the same key
+
+SETUP FUTURE USAGE
+------------------
+- 'setup_future_usage' => 'off_session' — saves the card for future payments
+- the school does not need to re-enter card details on next booking
+- Stripe attaches the PaymentMethod to the Customer automatically
+
+ERROR HANDLING
+--------------
+- Stripe\Exception\ApiErrorException → catches all Stripe API errors
+  - CardException          → card was declined
+  - RateLimitException     → too many requests
+  - InvalidRequestException → bad parameters
+- always log error + context (booking_id, user_id) before returning 422
+
+CONFIG STRUCTURE
+----------------
+- config/services.php        → third-party API keys
+- env('STRIPE_KEY')          → publishable key (safe for frontend)
+- env('STRIPE_SECRET')       → secret key (server only — never expose)
+- env('STRIPE_WEBHOOK_SECRET') → webhook signing secret
+
+ARTISAN
+-------
+- composer require stripe/stripe-php             → install Stripe PHP SDK
+- php artisan make:controller PaymentController  → controller stub
+- php artisan make:model Payment -m              → model + migration
+- php artisan make:migration add_payment_customer_id_to_users_table
+
+================================================================
+*/
