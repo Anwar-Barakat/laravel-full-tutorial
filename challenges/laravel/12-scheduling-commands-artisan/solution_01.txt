@@ -9,14 +9,193 @@
 // app/Console/Commands/SendBookingReminders.php
 // ============================================================
 
+namespace App\Console\Commands;
+
+use App\Mail\BookingReminderMail;
+use App\Models\Booking;
+use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Mail;
+
+class SendBookingReminders extends Command
+{
+    protected $signature   = 'bookings:send-reminders {--days=7 : Days ahead to look for upcoming trips}';
+    protected $description = 'Email schools about upcoming trips';
+
+    public function handle(): int
+    {
+        $days = (int) $this->option('days');
+
+        $bookings = Booking::with('school')
+            ->where('status', 'paid')
+            ->whereBetween('trip_date', [now(), now()->addDays($days)])
+            ->get();
+
+        if ($bookings->isEmpty()) {
+            $this->info('No upcoming bookings found for the next ' . $days . ' days.');
+            return self::SUCCESS;
+        }
+
+        $bar = $this->output->createProgressBar($bookings->count());
+        $bar->start();
+
+        $sent = 0;
+        foreach ($bookings as $booking) {
+            try {
+                Mail::to($booking->school->email)
+                    ->queue(new BookingReminderMail($booking, $days));
+                $sent++;
+            } catch (\Exception $e) {
+                $this->error('Failed for booking ' . $booking->reference . ': ' . $e->getMessage());
+            }
+            $bar->advance();
+        }
+
+        $bar->finish();
+        $this->newLine();
+        $this->info("Sent {$sent} reminder(s) for trips in the next {$days} day(s).");
+
+        return self::SUCCESS;
+    }
+}
 
 
 // ============================================================
 // app/Console/Commands/GenerateBookingReport.php
 // ============================================================
 
+namespace App\Console\Commands;
+
+use App\Models\Booking;
+use Illuminate\Console\Command;
+use Illuminate\Support\Carbon;
+use League\Csv\Writer;
+
+class GenerateBookingReport extends Command
+{
+    protected $signature   = 'bookings:generate-report {month : Month in Y-m format e.g. 2026-03}';
+    protected $description = 'Generate a monthly booking report as CSV';
+
+    public function handle(): int
+    {
+        $month = $this->argument('month');
+
+        try {
+            $date = Carbon::createFromFormat('Y-m', $month);
+        } catch (\Exception $e) {
+            $this->error('Invalid month format. Use Y-m e.g. 2026-03');
+            return self::FAILURE;
+        }
+
+        $bookings = Booking::with('school', 'destination')
+            ->whereBetween('created_at', [$date->startOfMonth(), $date->copy()->endOfMonth()])
+            ->get();
+
+        if ($bookings->isEmpty()) {
+            $this->warn('No bookings found for ' . $month);
+            return self::SUCCESS;
+        }
+
+        $filename = storage_path('reports/bookings-' . $month . '.csv');
+        $csv      = Writer::createFromPath($filename, 'w+');
+
+        $csv->insertOne(['Reference', 'School', 'Destination', 'Students', 'Amount', 'Status', 'Trip Date']);
+
+        $bar = $this->output->createProgressBar($bookings->count());
+        $bar->start();
+
+        foreach ($bookings as $booking) {
+            $csv->insertOne([
+                $booking->reference,
+                $booking->school->name,
+                $booking->destination->name,
+                $booking->student_count,
+                $booking->amount,
+                $booking->status,
+                $booking->trip_date->format('Y-m-d'),
+            ]);
+            $bar->advance();
+        }
+
+        $bar->finish();
+        $this->newLine();
+        $this->info("Report saved to: {$filename}");
+
+        return self::SUCCESS;
+    }
+}
 
 
 // ============================================================
 // routes/console.php  (schedule both commands)
 // ============================================================
+
+use Illuminate\Support\Facades\Schedule;
+
+Schedule::command('bookings:send-reminders --days=7')
+    ->dailyAt('08:00')
+    ->withoutOverlapping()
+    ->onOneServer()
+    ->appendOutputTo(storage_path('logs/reminders.log'));
+
+Schedule::command('bookings:generate-report ' . now()->subMonth()->format('Y-m'))
+    ->monthlyOn(1, '06:00')
+    ->withoutOverlapping()
+    ->onOneServer()
+    ->sendOutputTo(storage_path('logs/reports.log'));
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+COMMAND SIGNATURE
+-----------------
+• {arg}          → required argument
+• {arg?}         → optional argument
+• {arg=default}  → argument with default
+• {--flag}       → boolean option (present = true)
+• {--days=7}     → option with default value
+• access in handle(): $this->argument('arg'), $this->option('days')
+
+RETURN CODES
+------------
+• return self::SUCCESS  → exit code 0 — all good
+• return self::FAILURE  → exit code 1 — something went wrong
+• return self::INVALID  → exit code 2 — bad input
+• exit codes matter for cron monitoring and CI pipelines
+
+PROGRESS BAR
+------------
+• $bar = $this->output->createProgressBar($total)
+• $bar->start()    → render the bar
+• $bar->advance()  → increment by 1
+• $bar->finish()   → mark complete
+• $this->newLine() → move cursor below bar after finish
+
+OUTPUT METHODS
+--------------
+• $this->info('message')    → green text
+• $this->warn('message')    → yellow text
+• $this->error('message')   → red text (stderr)
+• $this->line('message')    → plain text
+
+SCHEDULING OPTIONS
+------------------
+• ->dailyAt('08:00')         → every day at 8am
+• ->monthlyOn(1, '06:00')    → 1st of each month at 6am
+• ->withoutOverlapping()     → skip if previous run still going
+• ->onOneServer()            → only run on one server in multi-server setup
+• ->appendOutputTo($path)    → append console output to log file
+• ->sendOutputTo($path)      → overwrite log file each run
+
+ARTISAN
+-------
+• php artisan make:command SendBookingReminders     → command stub
+• php artisan bookings:send-reminders --days=3      → run manually
+• php artisan schedule:run                          → trigger scheduler (cron calls this)
+• php artisan schedule:work                         → run scheduler in foreground (local dev)
+• php artisan schedule:list                         → list all scheduled tasks
+
+================================================================
+*/

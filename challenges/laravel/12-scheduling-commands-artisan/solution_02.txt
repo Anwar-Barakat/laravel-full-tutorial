@@ -9,14 +9,177 @@
 // app/Console/Commands/CleanupOldBookings.php
 // ============================================================
 
+namespace App\Console\Commands;
+
+use App\Models\Booking;
+use Illuminate\Console\Command;
+
+class CleanupOldBookings extends Command
+{
+    protected $signature   = 'bookings:cleanup';
+    protected $description = 'Soft-delete bookings older than 1 year';
+
+    public function handle(): int
+    {
+        $cutoff  = now()->subYear();
+        $deleted = 0;
+
+        Booking::where('created_at', '<', $cutoff)
+            ->whereNull('deleted_at')
+            ->chunkById(100, function ($bookings) use (&$deleted) {
+                foreach ($bookings as $booking) {
+                    $booking->delete();
+                    $deleted++;
+                }
+
+                $this->line("Deleted chunk — total so far: {$deleted}");
+            });
+
+        $this->info("Cleanup complete. Total deleted: {$deleted}");
+
+        return self::SUCCESS;
+    }
+}
 
 
 // ============================================================
 // app/Console/Commands/SyncExternalSchools.php
 // ============================================================
 
+namespace App\Console\Commands;
+
+use App\Models\School;
+use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Http;
+
+class SyncExternalSchools extends Command
+{
+    protected $signature   = 'bookings:sync-external';
+    protected $description = 'Pull latest school data from external API';
+
+    public function handle(): int
+    {
+        $response = Http::timeout(10)->get(config('services.external_api.schools_url'));
+
+        if ($response->failed()) {
+            $this->error('External API is down — skipping sync.');
+            return self::FAILURE;
+        }
+
+        $schools = $response->json('data', []);
+        $updated = 0;
+
+        foreach ($schools as $data) {
+            School::updateOrCreate(
+                ['external_id' => $data['id']],
+                [
+                    'name'    => $data['name'],
+                    'email'   => $data['email'],
+                    'phone'   => $data['phone'] ?? null,
+                    'address' => $data['address'] ?? null,
+                ]
+            );
+            $updated++;
+        }
+
+        $this->info("Synced {$updated} school(s) from external API.");
+
+        return self::SUCCESS;
+    }
+}
 
 
 // ============================================================
 // routes/console.php  (advanced schedule with callbacks + monitoring)
 // ============================================================
+
+use App\Mail\ScheduleFailedMail;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Schedule;
+
+Schedule::command('bookings:cleanup')
+    ->weekdays()
+    ->at('02:00')
+    ->environments('production')
+    ->withoutOverlapping(30)
+    ->onOneServer()
+    ->sendOutputTo(storage_path('logs/cleanup.log'))
+    ->pingBefore(config('services.healthcheck.cleanup_before_url'))
+    ->thenPing(config('services.healthcheck.cleanup_after_url'))
+    ->onSuccess(function () {
+        \Log::info('bookings:cleanup completed successfully');
+    })
+    ->onFailure(function () {
+        Mail::to(config('mail.admin_address'))
+            ->send(new ScheduleFailedMail('bookings:cleanup'));
+
+        \Log::error('bookings:cleanup failed');
+    });
+
+Schedule::command('bookings:sync-external')
+    ->hourly()
+    ->withoutOverlapping()
+    ->onOneServer()
+    ->environments(['production', 'staging'])
+    ->appendOutputTo(storage_path('logs/sync.log'))
+    ->onFailure(function () {
+        \Log::warning('bookings:sync-external failed — API may be down');
+    });
+
+Schedule::call(function () {
+    \Illuminate\Support\Facades\Cache::forget('dashboard:stats');
+})->everyFiveMinutes()
+    ->name('clear-dashboard-cache')
+    ->withoutOverlapping();
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+CHUNKBYID FOR MEMORY SAFETY
+-----------------------------
+• Booking::chunkById(100, fn($chunk) => ...) → processes 100 rows at a time
+• uses WHERE id > $lastId under the hood — no OFFSET slowdown
+• safe to delete records inside the chunk — won't skip rows
+• $deleted counter: use &$deleted (pass by reference) to increment inside closure
+
+ENVIRONMENT-AWARE SCHEDULING
+------------------------------
+• ->environments('production')           → only run in production
+• ->environments(['production', 'staging']) → run in either
+• skips in local/testing — prevents dev machines running production tasks
+• combine with ->onOneServer() to avoid running on every prod node
+
+SUCCESS / FAILURE CALLBACKS
+-----------------------------
+• ->onSuccess(fn() => ...)  → runs if command exits 0
+• ->onFailure(fn() => ...)  → runs if command exits non-zero
+• use for: alerting admins, logging, updating health dashboards
+• command must return self::SUCCESS / self::FAILURE for callbacks to fire correctly
+
+PINGBEFORE / THENPINGAFTER
+----------------------------
+• ->pingBefore($url)  → HTTP GET to $url before running (tells monitor "starting")
+• ->thenPing($url)    → HTTP GET to $url after success (tells monitor "completed")
+• works with healthchecks.io, Cronitor, OhDear, etc.
+• if ping doesn't fire within expected interval → monitoring tool alerts you
+
+SCHEDULE::CALL VS SCHEDULE::COMMAND
+-------------------------------------
+• Schedule::command('cmd') → runs an Artisan command
+• Schedule::call(fn()...)  → inline closure, no command class needed
+• Schedule::call() supports ->name(), ->withoutOverlapping()
+• use ->call() for quick tasks (clear a cache key, send a metric)
+• use ->command() for anything that needs testing, output logging, or reuse
+
+ARTISAN
+-------
+• php artisan schedule:run   → execute scheduled tasks (called by cron every minute)
+• php artisan schedule:work  → run scheduler in foreground with 1-min sleep (dev)
+• php artisan schedule:list  → show all tasks and their next run time
+• cron entry: * * * * * cd /app && php artisan schedule:run >> /dev/null 2>&1
+
+================================================================
+*/
