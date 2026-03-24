@@ -1,7 +1,7 @@
 <?php
 
 // ============================================================
-// Problem 01 — Cache-Aside & Tagged Caching
+// Caching & Redis — Real World Patterns
 // ============================================================
 
 
@@ -9,20 +9,235 @@
 // app/Observers/BookingObserver.php
 // ============================================================
 
+namespace App\Observers;
+
+use App\Models\Booking;
+use Illuminate\Support\Facades\Cache;
+
+class BookingObserver
+{
+    // created — booking just added to DB
+    // the cached list is now missing it → flush the list
+    // no forget() needed — the booking was never cached individually yet
+    public function created(Booking $booking): void
+    {
+        Cache::tags(['school:' . $booking->school_id, 'bookings'])->flush();
+        Cache::tags(['dashboard'])->flush();
+    }
+
+    // updated — booking changed (e.g. status: pending → paid)
+    // the individual cached copy is stale → forget it
+    // the list that contains it is stale → flush the list
+    // dashboard totals may have changed → flush dashboard
+    // uses updated (AFTER save) not updating (BEFORE save)
+    // so that fresh() returns the new values, not the old ones
+    public function updated(Booking $booking): void
+    {
+        Cache::put(
+            'booking:' . $booking->id,
+            $booking->fresh()->load('school', 'destination'),
+            300
+        );
+        Cache::tags(['school:' . $booking->school_id, 'bookings'])->flush();
+        Cache::tags(['dashboard'])->flush();
+    }
+
+    // deleted — booking removed from DB
+    // forget the individual key or it returns a ghost record
+    // flush the list — it still contains the deleted booking
+    // flush dashboard — totals went down
+    public function deleted(Booking $booking): void
+    {
+        Cache::forget('booking:' . $booking->id);
+        Cache::tags(['school:' . $booking->school_id, 'bookings'])->flush();
+        Cache::tags(['dashboard'])->flush();
+    }
+}
 
 
 // ============================================================
-// app/Providers/AppServiceProvider.php  (register observer)
+// app/Providers/AppServiceProvider.php
 // ============================================================
 
+namespace App\Providers;
+
+use App\Models\Booking;
+use App\Observers\BookingObserver;
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function boot(): void
+    {
+        Booking::observe(BookingObserver::class);
+    }
+}
 
 
 // ============================================================
 // app/Repositories/CachedBookingRepository.php
 // ============================================================
 
+namespace App\Repositories;
+
+use App\Models\Booking;
+use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Support\Facades\Cache;
+
+class CachedBookingRepository
+{
+    private const TTL_BOOKING   = 300;   // 5 minutes
+    private const TTL_SCHOOL    = 600;   // 10 minutes
+    private const TTL_DASHBOARD = 300;   // 5 minutes
+
+    // Cache-aside pattern:
+    // check Redis first → if miss, hit DB, save to Redis, return
+    // next request within TTL → Redis hit, DB not touched
+    public function find(int $id): ?Booking
+    {
+        return Cache::remember('booking:' . $id, self::TTL_BOOKING, fn() =>
+            Booking::with('school', 'destination')->find($id)
+        );
+    }
+
+    // Tagged cache — all booking lists for a school share a tag
+    // so one flush() clears all variants (paginated, filtered, sorted)
+    // without needing to know every key name
+    public function forSchool(int $schoolId): \Illuminate\Support\Collection
+    {
+        return Cache::tags(['school:' . $schoolId, 'bookings'])
+            ->remember('school:' . $schoolId . ':bookings', self::TTL_SCHOOL, fn() =>
+                Booking::where('school_id', $schoolId)->with('destination')->get()
+            );
+    }
+
+    // Dashboard stats change on every booking mutation
+    // cached with a tag so the observer can flush with one call
+    public function dashboardStats(): array
+    {
+        return Cache::tags(['dashboard'])
+            ->remember('dashboard:stats', self::TTL_DASHBOARD, fn() =>
+                app(\App\Services\BookingStatsService::class)->getDashboardStats()
+            );
+    }
+
+    // Distributed lock — prevents two simultaneous requests
+    // creating duplicate bookings for the same school
+    // block(5) = wait up to 5 seconds to acquire, then execute
+    // LockTimeoutException thrown if lock not acquired in time
+    public function createWithLock(int $schoolId, array $data): Booking
+    {
+        $lock = Cache::lock('booking:create:' . $schoolId, 10);
+
+        try {
+            return $lock->block(5, function () use ($data) {
+                return Booking::create($data);
+            });
+        } catch (LockTimeoutException) {
+            throw new \RuntimeException('Could not acquire booking lock — try again');
+        }
+    }
+}
 
 
 // ============================================================
-// config/cache.php  +  .env  (Redis driver)
+// config/cache.php + .env
 // ============================================================
+
+// .env
+// CACHE_STORE=redis
+// SESSION_DRIVER=redis
+// REDIS_HOST=127.0.0.1
+// REDIS_PASSWORD=null
+// REDIS_PORT=6379
+
+// config/cache.php
+return [
+    'default' => env('CACHE_STORE', 'redis'),
+
+    'stores' => [
+        'redis' => [
+            'driver'          => 'redis',
+            'connection'      => 'cache',
+            'lock_connection' => 'default',
+        ],
+    ],
+];
+
+
+/*
+================================================================
+TIPS — PROBLEM 01
+================================================================
+
+WHAT IS CACHE
+-------------
+- Cache = save a slow DB result in Redis so the next request is instant
+- Redis = in-memory store that survives between requests
+- Cache miss  = key not found → hit DB → save to Redis → return
+- Cache hit   = key found in Redis → return immediately, DB not touched
+- TTL = time to live — after N seconds the key auto-deletes
+  300 = 5 minutes, 600 = 10 minutes, 3600 = 1 hour
+
+CACHE::REMEMBER
+---------------
+- Cache::remember($key, $ttl, fn() => $value)
+  → if key exists in Redis: return cached value
+  → if key missing: run callback, store result, return it
+- Cache::rememberForever($key, fn()) → no TTL, stays until manually deleted
+- use for: reference data that almost never changes (destinations, settings)
+
+TAGGED CACHES
+-------------
+- Cache::tags(['tag'])->remember($key, $ttl, fn()) → attach tag to entry
+- Cache::tags(['tag'])->flush()                    → delete ALL keys with that tag
+- use when: one change invalidates many keys you can't enumerate
+  (paginated lists, filtered results, sorted variants)
+- requires Redis or Memcached — file/database drivers do not support tags
+- forget() = delete one known key by name
+- flush()  = delete a whole group by tag — key names don't matter
+
+CACHE INVALIDATION VIA OBSERVER
+---------------------------------
+- Observer watches model events, clears cache automatically on change
+- created  → list is missing the new item → flush list + dashboard
+             no forget() needed — booking was never individually cached yet
+- updated  → individual key is stale → put() new value (write-through)
+             list contains the old version → flush list + dashboard
+             use updated (AFTER save), not updating (BEFORE save)
+             fresh() on updating returns old data — DB not yet saved
+- deleted  → individual key is a ghost → forget it
+             list still has the deleted item → flush list + dashboard
+
+OBSERVER EVENT HOOKS
+--------------------
+- BEFORE save: creating, updating, deleting, saving
+- AFTER save:  created, updated, deleted, saved
+- write-through caching always uses AFTER events
+  so that fresh() and DB reads return the new saved state
+
+CACHE LOCK — RACE CONDITIONS
+-----------------------------
+- Cache::lock('key', $seconds) → acquire a distributed lock
+- lock->block($wait, fn())     → wait up to N seconds to acquire, then run
+- always catch LockTimeoutException — thrown if lock not acquired in time
+- use for: booking creation, payment processing, any write that must not duplicate
+- lock key must include the resource ID: 'booking:create:' . $schoolId
+
+WHEN TO USE WHAT
+----------------
+- Cache::forget()       → single known key (individual booking, user profile)
+- tags()->flush()       → group of related keys (all bookings for a school)
+- Cache::flush()        → everything — only in tests or artisan commands
+- Cache::lock()         → prevent concurrent duplicate writes
+- Cache::remember()     → cache-aside (lazy caching on first miss)
+- Cache::put()          → write-through (update cache immediately on change)
+
+ARTISAN
+-------
+- php artisan make:observer BookingObserver --model=Booking
+- php artisan cache:clear
+- php artisan cache:forget booking:42
+
+================================================================
+*/
