@@ -9,14 +9,130 @@
 // app/Events/BookingStatusChanged.php
 // ============================================================
 
+namespace App\Events;
+
+use App\Http\Resources\BookingResource;
+use App\Models\Booking;
+use Illuminate\Broadcasting\InteractsWithSockets;
+use Illuminate\Broadcasting\PrivateChannel;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Foundation\Events\Dispatchable;
+use Illuminate\Queue\SerializesModels;
+
+class BookingStatusChanged implements ShouldBroadcast {
+    use Dispatchable, InteractsWithSockets, SerializesModels;
+
+    public function __construct(public readonly Booking $booking){}
+
+    public function broadcastOn() {
+        return [
+            new PrivateChannel('school.' . $this->booking->school_id)
+        ];
+    }
+
+    public function broadcastWith() {
+        return [
+            'booking' => BookingResource::make($this->booking)
+        ];
+    }
+
+    public function broadcastAs() {
+        return 'booking.status.changed';
+    }
+}
+
 
 
 // ============================================================
 // app/Events/BookingCreated.php  (add ShouldBroadcast)
 // ============================================================
 
+class BookingCreated implements ShouldBroadcast {
+    use Dispatchable, InteractsWithSockets, SerializesModels;
+    public function __construct(
+        public readonly Booking $booking
+    ){}
+
+    public function broadcastOn() {
+        return [
+            new PrivateChannel('school.'. $this->booking->school_id)
+        ];
+    }
+
+    public function broadcastWith() {
+        return [
+            'booking' =>  BookingResource::make($this->booking)
+        ];
+    }
+
+    public function broadcastAs() {
+        return 'booking.created';
+    }
+}
 
 
 // ============================================================
 // routes/channels.php  (authorize private + presence channels)
 // ============================================================
+
+use Illuminate\Support\Facades\Broadcast;
+
+Broadcast::channel('school.{schoolId}', function ($user, $schoolId) {
+    return (int) $user->school_id === (int) $schoolId;
+});
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+SHOULDBROADCAST
+---------------
+• implement ShouldBroadcast on the event class — not a job, not a listener
+• traits needed: Dispatchable, InteractsWithSockets, SerializesModels
+• NO $tries, NO handle() — those belong to Jobs
+• broadcastOn()   → which channel(s) to broadcast on — must be public
+• broadcastWith() → what data to send — must return an array
+• broadcastAs()   → custom event name on the frontend — optional but recommended
+
+CHANNEL TYPES
+-------------
+• Channel('name')         → public — anyone can subscribe, no auth
+• PrivateChannel('name')  → private — requires authorization in channels.php
+• PresenceChannel('name') → presence — like private + tracks who is online
+
+CHANNEL NAMING
+--------------
+• 'school.{schoolId}'  → dynamic segment using {placeholder}
+• Laravel extracts {schoolId} and passes it as $schoolId to the auth callback
+• frontend subscribes to: Echo.private('school.1')
+
+ROUTES/CHANNELS.PHP — PRIVATE CHANNEL AUTH
+--------------------------------------------
+• Broadcast::channel('school.{schoolId}', fn($user, $schoolId) => ...)
+• return true/false  → grants or denies access
+• $user is the authenticated user (auto-injected by Laravel)
+• $schoolId comes from the channel name — arrives as a STRING, so cast: (int)
+• use === not == to avoid type juggling bugs
+
+BROADCASTWITH
+-------------
+• must return an array: ['booking' => BookingResource::make($this->booking)]
+• the array keys become the payload properties on the frontend
+• using an API Resource here keeps the shape consistent with your REST API
+
+DISPATCHING EVENTS
+------------------
+• BookingStatusChanged::dispatch($booking)   → fires the event + broadcasts
+• event(new BookingStatusChanged($booking))  → alternative syntax
+• both queue the broadcast if ShouldBroadcastNow is not used
+
+ARTISAN
+-------
+• php artisan make:event BookingStatusChanged   → event stub
+• php artisan reverb:start                      → start Reverb WebSocket server
+• php artisan queue:work                        → process broadcast jobs from queue
+
+================================================================
+*/

@@ -9,20 +9,204 @@
 // app/Events/PaymentConfirmed.php  (ShouldBroadcastNow — immediate)
 // ============================================================
 
+namespace App\Events;
+
+use App\Http\Resources\BookingResource;
+use App\Models\Booking;
+use Illuminate\Broadcasting\Channel;
+use Illuminate\Broadcasting\InteractsWithSockets;
+use Illuminate\Broadcasting\PrivateChannel;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
+use Illuminate\Foundation\Events\Dispatchable;
+use Illuminate\Queue\SerializesModels;
+
+class PaymentConfirmed implements ShouldBroadcastNow
+{
+    use Dispatchable, InteractsWithSockets, SerializesModels;
+
+    public function __construct(public readonly Booking $booking) {}
+
+    public function broadcastOn(): array
+    {
+        return [
+            new PrivateChannel('school.' . $this->booking->school_id),
+        ];
+    }
+
+    public function broadcastWith(): array
+    {
+        return [
+            'booking' => BookingResource::make($this->booking),
+        ];
+    }
+
+    public function broadcastAs(): string
+    {
+        return 'payment.confirmed';
+    }
+}
 
 
 // ============================================================
 // app/Events/BookingActivityUpdated.php  (ShouldBroadcast — queued)
 // ============================================================
 
+namespace App\Events;
+
+use App\Http\Resources\BookingResource;
+use App\Models\Booking;
+use Illuminate\Broadcasting\Channel;
+use Illuminate\Broadcasting\InteractsWithSockets;
+use Illuminate\Broadcasting\PrivateChannel;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Foundation\Events\Dispatchable;
+use Illuminate\Queue\SerializesModels;
+
+class BookingActivityUpdated implements ShouldBroadcast
+{
+    use Dispatchable, InteractsWithSockets, SerializesModels;
+
+    public string $queue       = 'broadcasts';
+    public bool   $afterCommit = true;
+
+    public function __construct(public readonly Booking $booking) {}
+
+    public function broadcastOn(): array
+    {
+        return [
+            new PrivateChannel('school.' . $this->booking->school_id),
+            new PrivateChannel('booking.' . $this->booking->id),
+            new Channel('admin.dashboard'),
+        ];
+    }
+
+    public function broadcastWith(): array
+    {
+        return [
+            'booking' => BookingResource::make($this->booking),
+        ];
+    }
+
+    public function broadcastAs(): string
+    {
+        return 'booking.activity.updated';
+    }
+}
 
 
 // ============================================================
 // app/Http/Controllers/BookingController.php  (toOthers + multi-channel)
 // ============================================================
 
+namespace App\Http\Controllers;
+
+use App\Events\BookingStatusChanged;
+use App\Http\Resources\BookingResource;
+use App\Models\Booking;
+use Illuminate\Http\Request;
+
+class BookingController extends Controller
+{
+    public function update(Request $request, Booking $booking)
+    {
+        $booking->update(['status' => $request->status]);
+
+        broadcast(new BookingStatusChanged($booking))->toOthers();
+
+        return response()->json([
+            'message' => 'Booking updated',
+            'booking' => BookingResource::make($booking),
+        ]);
+    }
+}
 
 
 // ============================================================
 // config/broadcasting.php  +  .env  (Reverb config)
 // ============================================================
+
+// config/broadcasting.php — add inside 'connections' array:
+'reverb' => [
+    'driver'  => 'reverb',
+    'key'     => env('REVERB_APP_KEY'),
+    'secret'  => env('REVERB_APP_SECRET'),
+    'app_id'  => env('REVERB_APP_ID'),
+    'options' => [
+        'host'   => env('REVERB_HOST', 'localhost'),
+        'port'   => env('REVERB_PORT', 8080),
+        'scheme' => env('REVERB_SCHEME', 'http'),
+    ],
+],
+
+// .env
+// BROADCAST_CONNECTION=reverb
+// REVERB_APP_ID=my-app
+// REVERB_APP_KEY=my-key
+// REVERB_APP_SECRET=my-secret
+// REVERB_HOST=localhost
+// REVERB_PORT=8080
+// REVERB_SCHEME=http
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+SHOULDBROADCASTNOW VS SHOULDBROADCAST
+--------------------------------------
+• ShouldBroadcast     → queued — broadcast job goes to queue, async
+• ShouldBroadcastNow  → immediate — bypasses queue, broadcasts synchronously
+• use ShouldBroadcastNow for urgent events: payment confirmed, auth errors
+• use ShouldBroadcast  for non-urgent: activity logs, notifications
+
+$QUEUE AND $AFTERCOMMIT
+------------------------
+• public string $queue = 'broadcasts'  → sends broadcast job to 'broadcasts' queue
+• public bool $afterCommit = true      → waits for DB transaction to commit before dispatching
+• without $afterCommit: frontend may receive event before DB write completes (race condition)
+• these are public properties — Laravel reads them automatically, no method call needed
+
+BROADCAST() VS EVENT() VS DISPATCH()
+--------------------------------------
+• broadcast(new MyEvent()) → returns a PendingBroadcast — has ->toOthers()
+• event(new MyEvent())     → fires the event, no ->toOthers() available
+• MyEvent::dispatch()      → same as event(), no ->toOthers() available
+• rule: use broadcast() when you need toOthers(), otherwise any works
+
+TOOTHERS()
+----------
+• broadcast(new BookingStatusChanged($booking))->toOthers()
+• excludes the current HTTP request's socket from receiving the broadcast
+• prevents the sender seeing their own update twice (once from API response, once from socket)
+• requires the frontend to send X-Socket-ID header with each request
+
+MULTI-CHANNEL BROADCASTING
+----------------------------
+• return multiple channels from broadcastOn() — event broadcasts to ALL of them
+• PrivateChannel('school.1')   → only school 1 users
+• PrivateChannel('booking.42') → only users watching that specific booking
+• Channel('admin.dashboard')   → public channel, any admin can subscribe
+• useful for events that need to update multiple views simultaneously
+
+CHANNEL TYPES
+-------------
+• Channel('name')         → public — no auth required
+• PrivateChannel('name')  → private — authorized in channels.php (return bool)
+• PresenceChannel('name') → presence — authorized in channels.php (return array with user data)
+
+CLIENT WHISPERS (no server needed)
+------------------------------------
+• Echo.private('booking.42').whisper('typing', { user: 'Nasar' })
+• Echo.private('booking.42').listenForWhisper('typing', (e) => { ... })
+• whispers go client-to-client via Reverb — no Laravel event, no queue, no DB
+• use for: typing indicators, cursor positions, ephemeral UI state
+
+REVERB CONFIG
+-------------
+• BROADCAST_CONNECTION=reverb  → tells Laravel to use Reverb as the broadcast driver
+• php artisan reverb:start     → start the WebSocket server
+• php artisan queue:work --queue=broadcasts  → process broadcast queue
+
+================================================================
+*/
