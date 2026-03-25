@@ -9,14 +9,141 @@
 // app/Http/Resources/BookingResource.php
 // ============================================================
 
+namespace App\Http\Resources;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class BookingResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'               => $this->id,
+            'school_name'      => $this->school->name,
+            'amount'           => $this->amount,
+            'amount_formatted' => 'AED ' . number_format($this->amount, 2),
+            'status'           => $this->status,
+            'trip_date'        => $this->trip_date->format('Y-m-d'),
+            'is_upcoming'      => $this->trip_date->isFuture(),
+
+            // only included when the relation was eager loaded
+            'school'           => new SchoolResource($this->whenLoaded('school')),
+            'payments'         => PaymentResource::collection($this->whenLoaded('payments')),
+        ];
+    }
+}
 
 
 // ============================================================
 // app/Http/Resources/BookingCollection.php
 // ============================================================
 
+namespace App\Http\Resources;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\ResourceCollection;
+
+class BookingCollection extends ResourceCollection
+{
+    public function with(Request $request): array
+    {
+        return [
+            'meta' => [
+                'total_revenue'  => $this->collection->sum('amount'),
+                'total_bookings' => $this->collection->count(),
+            ],
+        ];
+    }
+}
 
 
 // ============================================================
 // app/Http/Controllers/BookingController.php  (cursor pagination + sparse fieldsets)
 // ============================================================
+
+namespace App\Http\Controllers;
+
+use App\Http\Resources\BookingCollection;
+use App\Http\Resources\BookingResource;
+use App\Models\Booking;
+use Illuminate\Http\Request;
+
+class BookingController extends Controller
+{
+    public function index(Request $request): BookingCollection
+    {
+        $bookings = Booking::with(['school', 'payments'])
+            ->cursorPaginate(15);
+
+        return new BookingCollection($bookings);
+    }
+
+    public function show(Booking $booking): BookingResource
+    {
+        return BookingResource::make($booking->load('school', 'payments'));
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+JSONRESOURCE VS RESOURCECOLLECTION
+------------------------------------
+• JsonResource       → shapes ONE item — implement toArray()
+• ResourceCollection → wraps MANY items + adds custom meta via with()
+• ResourceCollection automatically uses the matching Resource (BookingCollection → BookingResource)
+• you cannot merge both into one class — they have different jobs
+
+WHEN DO YOU NEED BOOKINGCOLLECTION?
+-------------------------------------
+• BookingResource::collection(Booking::paginate(15))
+  → pagination only — data + meta + links (Laravel default)
+  → no extra meta needed
+
+• new BookingCollection(Booking::paginate(15))
+  → pagination + your custom meta (total_revenue, applied filters, etc.)
+  → use when you need more than what Laravel gives by default
+
+WHENLOADED VS WHEN
+-------------------
+• $this->whenLoaded('school')   → include 'school' key only if relation was eager loaded
+• $this->when($condition, $val) → include key only if condition is true
+• without whenLoaded: if relation not loaded, Laravel fires N+1 query per item
+• with whenLoaded: if not loaded, the key is simply omitted from the response
+
+PAGINATE VS CURSORPAGINATE
+----------------------------
+• paginate(15)       → uses OFFSET — SELECT * LIMIT 15 OFFSET 30
+                       gives page numbers, user can jump to any page (?page=5)
+                       gets slow on large tables — scans all rows up to offset
+
+• cursorPaginate(15) → uses WHERE id > last_id — jumps straight to next record
+                       no page numbers — only next_cursor / prev_cursor
+                       always fast regardless of table size
+                       use for: infinite scroll, mobile load-more
+
+SAME CONCEPT AS CHUNK VS CHUNKBYID
+------------------------------------
+• paginate()      ↔ chunk()      → both use OFFSET, slow on large tables
+• cursorPaginate() ↔ chunkById() → both use WHERE id > last_id, always fast
+• chunkById/cursorPaginate = same SQL trick, different contexts
+  - chunkById      → processing large datasets (console commands, jobs)
+  - cursorPaginate → API responses to the frontend
+
+WITH() IN RESOURCECOLLECTION
+------------------------------
+• with() adds top-level keys alongside 'data' in the response
+• $this->collection → the Collection of resource objects inside the wrapper
+• $this->collection->sum('amount') → aggregate across all items in the page
+
+ARTISAN
+-------
+• php artisan make:resource BookingResource            → JsonResource stub
+• php artisan make:resource BookingCollection --collection → ResourceCollection stub
+
+================================================================
+*/

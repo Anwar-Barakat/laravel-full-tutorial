@@ -9,20 +9,195 @@
 // app/Http/Resources/V1/BookingResource.php
 // ============================================================
 
+namespace App\Http\Resources\V1;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class BookingResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'               => $this->id,
+            'school_name'      => $this->school->name,
+            'amount'           => $this->amount,
+            'amount_formatted' => 'AED ' . number_format($this->amount, 2),
+            'status'           => $this->status,
+            'trip_date'        => $this->trip_date->format('Y-m-d'),
+            'is_upcoming'      => $this->trip_date->isFuture(),
+
+            'school'           => new SchoolResource($this->whenLoaded('school')),
+            'payments'         => PaymentResource::collection($this->whenLoaded('payments')),
+
+            'links'            => [
+                'self'     => route('bookings.show', $this->id),
+                'school'   => route('schools.show', $this->school_id),
+                'payments' => route('bookings.payments.index', $this->id),
+            ],
+        ];
+    }
+}
 
 
 // ============================================================
 // app/Http/Resources/V2/BookingResource.php
 // ============================================================
 
+namespace App\Http\Resources\V2;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class BookingResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'               => $this->id,
+            'school_name'      => $this->school->name,
+            // V2: raw amount removed — only formatted version
+            'amount_formatted' => 'AED ' . number_format($this->amount, 2),
+            'status'           => $this->status,
+            'trip_date'        => $this->trip_date->format('Y-m-d'),
+            'is_upcoming'      => $this->trip_date->isFuture(),
+
+            'school'           => new SchoolResource($this->whenLoaded('school')),
+            'payments'         => PaymentResource::collection($this->whenLoaded('payments')),
+
+            'links'            => [
+                'self'     => route('bookings.show', $this->id),
+                'school'   => route('schools.show', $this->school_id),
+                'payments' => route('bookings.payments.index', $this->id),
+            ],
+        ];
+    }
+}
 
 
 // ============================================================
 // app/Http/Controllers/BookingController.php  (dynamic ?include=)
 // ============================================================
 
+namespace App\Http\Controllers;
+
+use App\Http\Resources\V1\BookingResource;
+use App\Models\Booking;
+use Illuminate\Http\Request;
+
+class BookingController extends Controller
+{
+    public function show(Request $request, Booking $booking): BookingResource
+    {
+        $allowed  = ['school', 'payments', 'destination'];
+        $includes = array_intersect(
+            explode(',', $request->string('include')),
+            $allowed
+        );
+
+        $booking->load($includes);
+
+        return BookingResource::make($booking);
+    }
+}
 
 
 // ============================================================
 // app/Exceptions/Handler.php  (consistent error envelope)
 // ============================================================
+
+namespace App\Exceptions;
+
+use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Foundation\Exceptions\Handler as ExceptionHandler;
+use Illuminate\Validation\ValidationException;
+use Throwable;
+
+class Handler extends ExceptionHandler
+{
+    public function render($request, Throwable $e)
+    {
+        if ($e instanceof ValidationException) {
+            return response()->json([
+                'error' => [
+                    'code'    => 'VALIDATION_FAILED',
+                    'message' => 'The given data was invalid.',
+                    'errors'  => $e->errors(),
+                ],
+            ], 422);
+        }
+
+        if ($e instanceof ModelNotFoundException) {
+            return response()->json([
+                'error' => [
+                    'code'    => 'NOT_FOUND',
+                    'message' => 'Resource not found.',
+                ],
+            ], 404);
+        }
+
+        if ($e instanceof AuthorizationException) {
+            return response()->json([
+                'error' => [
+                    'code'    => 'FORBIDDEN',
+                    'message' => $e->getMessage(),
+                ],
+            ], 403);
+        }
+
+        return parent::render($request, $e);
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+API VERSIONING VIA RESOURCES
+------------------------------
+• create App\Http\Resources\V1\BookingResource and V2\BookingResource
+• V1 keeps raw amount + amount_formatted
+• V2 removes raw amount — only amount_formatted
+• routes point to different resource classes: use V1\BookingResource or V2\BookingResource
+• no logic change in controller — just swap which resource class you return
+
+HATEOAS LINKS
+--------------
+• add 'links' array inside toArray() — not in with()
+• links describe THIS item, not the collection
+• route('bookings.show', $this->id) → generates the full URL
+• helps frontend navigate without hardcoding URLs
+
+DYNAMIC ?INCLUDE= WITH WHITELIST
+----------------------------------
+• explode(',', $request->string('include')) → splits 'school,payments' into array
+• array_intersect($requested, $allowed)     → removes anything not whitelisted
+• prevents client from loading arbitrary relations — security + performance
+• $booking->load($includes)                → eager loads only what was requested
+
+CONSISTENT ERROR ENVELOPE
+---------------------------
+• override render() in app/Exceptions/Handler.php
+• catch specific exception types with instanceof
+• return same shape every time: { error: { code, message, errors? } }
+• always call parent::render() at the end — handles all other exceptions
+• $e->errors()     → ValidationException only — returns field-level errors
+• $e->getMessage() → available on all exceptions — use for AuthorizationException
+
+INSTANCEOF KEYWORD
+-------------------
+• $e instanceof ValidationException → checks if $e is that class (or subclass)
+• one word: instanceof — NOT "instead of", NOT "instance of"
+• works with interfaces too: $e instanceof ShouldReport
+
+EXCEPTION TYPES + STATUS CODES
+--------------------------------
+• ValidationException      → 422 — field validation failed
+• ModelNotFoundException   → 404 — model not found via route model binding
+• AuthorizationException   → 403 — policy/gate returned false
+
+================================================================
+*/
