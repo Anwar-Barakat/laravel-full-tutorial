@@ -65,67 +65,62 @@ const BookingList: React.FC<BookingListProps> = ({
     });
     const [sort, setSort]               = useState<SortState>({ field: "tripDate", order: "desc" });
     const [currentPage, setCurrentPage] = useState(1);
-    const [pageSize, setPageSize]       = useState<number>(10);
+    const [pageSize, setPageSize]       = useState(10);
 
-    // ① filter + sort — recalculates only when bookings, filters, or sort changes
+    // ① filter + sort
     const filtered = useMemo(() => {
-        let result = [...bookings]
+        let results = [...bookings];
 
-        // step 1 — filter by status
         if (filters.status !== "all") {
-            result = result.filter((b) => b.status === filters.status)
+            results = results.filter((b) => b.status === filters.status);
         }
 
-        // step 2 — filter by search (school name or destination)
-        if (filters.search) {
-            const term = filters.search.toLowerCase()
-            result = result.filter(
+        if (filters.search.trim() !== "") {
+            const term = filters.search.toLowerCase();
+            results = results.filter(
                 (b) =>
                     b.schoolName.toLowerCase().includes(term) ||
-                    b.destination.toLowerCase().includes(term)
-            )
+                    b.destination.toLowerCase().includes(term),
+            );
         }
 
-        // step 3 — filter by date from
         if (filters.dateFrom) {
-            result = result.filter((b) => b.tripDate >= filters.dateFrom)
+            results = results.filter((b) => b.tripDate >= filters.dateFrom);
         }
 
-        // step 4 — filter by date to
         if (filters.dateTo) {
-            result = result.filter((b) => b.tripDate <= filters.dateTo)
+            results = results.filter((b) => b.tripDate <= filters.dateTo);
         }
 
-        // step 5 — sort
-        result.sort((a, b) => {
-            const aVal = a[sort.field]
-            const bVal = b[sort.field]
-            const dir  = sort.order === "asc" ? 1 : -1
+        results.sort((a, b) => {
+            const aVal = a[sort.field];
+            const bVal = b[sort.field];
+            const dir  = sort.order === "asc" ? 1 : -1;
             if (typeof aVal === "string" && typeof bVal === "string") {
-                return aVal.localeCompare(bVal) * dir
+                return aVal.localeCompare(bVal) * dir;
             }
-            return ((aVal as number) - (bVal as number)) * dir
-        })
+            return ((aVal as number) - (bVal as number)) * dir;
+        });
 
-        return result
-    }, [bookings, filters, sort])
+        return results;
+    }, [bookings, filters, sort]);
 
-    const totalPages = Math.ceil(filtered.length / pageSize)
+    const totalPages = Math.ceil(filtered.length / pageSize);
 
-    // ② paginate — recalculates only when filtered, page, or size changes
+    // ② paginate
     const paginated = useMemo(
         () => filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize),
-        [filtered, currentPage, pageSize]
-    )
+        [filtered, currentPage, pageSize],
+    );
 
     // ③ reset to page 1 when filters or pageSize change
-    useEffect(() => { setCurrentPage(1) }, [filters, pageSize])
+    useEffect(() => { setCurrentPage(1); }, [filters, pageSize]);
 
     function toggleSort(field: SortField): void {
         setSort((s) => ({
             field,
             order: s.field === field && s.order === "asc" ? "desc" : "asc",
-        }))
+        }));
     }
 
     if (isLoading) {
@@ -135,7 +130,7 @@ const BookingList: React.FC<BookingListProps> = ({
                     <div key={i} className="animate-pulse bg-gray-100 rounded-lg h-40" />
                 ))}
             </div>
-        )
+        );
     }
 
     return (
@@ -144,7 +139,9 @@ const BookingList: React.FC<BookingListProps> = ({
             <div className="flex flex-wrap gap-3 mb-4">
                 <select
                     value={filters.status}
-                    onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value as FilterState["status"] }))}
+                    onChange={(e) =>
+                        setFilters((f) => ({ ...f, status: e.target.value as FilterState["status"] }))
+                    }
                     className="border rounded-md px-3 py-2 text-sm"
                 >
                     <option value="all">All Statuses</option>
@@ -233,10 +230,10 @@ const BookingList: React.FC<BookingListProps> = ({
                 </div>
             )}
         </div>
-    )
-}
+    );
+};
 
-export default BookingList
+export default BookingList;
 
 
 /*
@@ -249,9 +246,9 @@ USEMEMO
 • useMemo(() => computation, [deps]) → caches result, only recomputes when deps change
 • use for expensive computations: filtering, sorting, transforming large arrays
 • two-level memo pattern:
-  - filtered = filter + sort (deps: bookings, filters, sort)
+  - filtered  = filter + sort  (deps: bookings, filters, sort)
   - paginated = slice of filtered (deps: filtered, currentPage, pageSize)
-• changing page → filtered doesn't recompute (currentPage not in its deps) ✅
+• changing page    → filtered doesn't recompute (currentPage not in its deps) ✅
 • changing filters → both recompute (filtered changes → paginated also changes) ✅
 
 USEEFFECT RESET PAGE
@@ -259,6 +256,7 @@ USEEFFECT RESET PAGE
 • useEffect(() => { setCurrentPage(1) }, [filters, pageSize])
 • without this: user on page 3, applies a filter → only 5 results → page 3 shows nothing
 • with this: any filter/size change resets to page 1 automatically
+• currentPage is NOT in deps — it's what you're setting, not watching (would cause infinite loop)
 
 FUNCTIONAL STATE UPDATE
 ------------------------
@@ -269,20 +267,30 @@ FUNCTIONAL STATE UPDATE
 
 SORT LOGIC
 ----------
-• dir = sort.order === "asc" ? 1 : -1
-• multiply comparison result by dir to flip order
-• strings: localeCompare() — handles names correctly across locales
-• numbers: (aVal - bVal) * dir
+• array.sort((a, b) => ...) goes through pairs and asks: which one comes first?
+• return negative → a comes first
+• return positive → b comes first
+• return zero     → same, no change
 
-FILTER LOGIC — STEP BY STEP (cleaner approach)
-------------------------------------------------
-• start with let result = [...bookings]  — copy the array
+• dir = sort.order === "asc" ? 1 : -1
+• multiplying by dir flips the result → reverses the order
+  asc:  (5-2) * 1  =  3 → positive → b(2) comes first → [1,2,5,8] ✅
+  desc: (5-2) * -1 = -3 → negative → a(5) comes first → [8,5,2,1] ✅
+
+• a[sort.field] → reads the field dynamically e.g. a["amount"] = same as a.amount
+• strings: localeCompare() — "Apple" - "Banana" = NaN, can't subtract strings
+• numbers: (aVal - bVal) * dir
+• check typeof first → strings use localeCompare, numbers use subtraction
+
+FILTER LOGIC — STEP BY STEP
+-----------------------------
+• start with let results = [...bookings]  — copy the array
 • apply each filter one at a time with if blocks
-• if (filters.status !== "all") → result = result.filter(b => b.status === filters.status)
-• if (filters.search)           → result = result.filter(b => name or destination includes term)
-• if (filters.dateFrom)         → result = result.filter(b => b.tripDate >= filters.dateFrom)
-• if (filters.dateTo)           → result = result.filter(b => b.tripDate <= filters.dateTo)
-• sort result last, then return result
+• if (filters.status !== "all") → results = results.filter(b => b.status === filters.status)
+• if (filters.search)           → results = results.filter(b => name or destination includes term)
+• if (filters.dateFrom)         → results = results.filter(b => b.tripDate >= filters.dateFrom)
+• if (filters.dateTo)           → results = results.filter(b => b.tripDate <= filters.dateTo)
+• sort result last, then return results
 • ISO date strings compare correctly with >= and <= operators ("2026-06-01" >= "2026-01-01" ✅)
 • search: use || (OR) — booking matches if school name OR destination contains the term
 
@@ -292,6 +300,15 @@ PAGINATION SLICE
 • page 2, size 10 → slice(10, 20)
 • formula: slice((currentPage - 1) * pageSize, currentPage * pageSize)
 • totalPages = Math.ceil(filtered.length / pageSize)
+
+S.CHARAT(0).TOUPPERCASE() + S.SLICE(1)
+----------------------------------------
+• JavaScript has no built-in capitalize() — this is how you do it manually
+• s.charAt(0)              → first character  e.g. "p"
+• s.charAt(0).toUpperCase() → "P"
+• s.slice(1)               → everything after index 0  e.g. "ending"
+• "P" + "ending"           → "Pending"
+• capitalize() exists in Python and CSS (text-transform) but NOT in JS
 
 ================================================================
 */
