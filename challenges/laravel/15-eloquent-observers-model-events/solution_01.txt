@@ -9,8 +9,152 @@
 // app/Observers/BookingObserver.php
 // ============================================================
 
+namespace App\Observers;
+
+use App\Models\Booking;
+use App\Models\User;
+use App\Notifications\BookingDeletedNotification;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
+
+class BookingObserver
+{
+    // Fires BEFORE INSERT — set fields before the row hits the DB
+    public function creating(Booking $booking): void
+    {
+        $datePart = now()->format('Ym');
+
+        $count = Booking::whereYear('created_at', now()->year)
+            ->whereMonth('created_at', now()->month)
+            ->count() + 1;
+
+        $booking->reference = 'BK-' . $datePart . '-' . str_pad($count, 4, '0', STR_PAD_LEFT);
+    }
+
+    // Fires BEFORE UPDATE — read dirty fields before they are saved
+    public function updating(Booking $booking): void
+    {
+        if ($booking->isDirty('status')) {
+            $old = $booking->getOriginal('status');
+            $new = $booking->status;
+
+            Log::info('Booking status changed', [
+                'booking_id' => $booking->id,
+                'from'       => $old,
+                'to'         => $new,
+            ]);
+        }
+    }
+
+    // Fires AFTER DELETE — safe to use $booking->id, school_id still accessible
+    public function deleted(Booking $booking): void
+    {
+        Cache::forget('booking:' . $booking->id);
+        Cache::tags(['school:' . $booking->school_id, 'bookings'])->flush();
+        Cache::tags(['dashboard'])->flush();
+
+        $admin = User::role('admin')->first();
+        $admin?->notify(new BookingDeletedNotification($booking));
+    }
+
+    // Fires BEFORE both INSERT and UPDATE — auto-calculate computed fields
+    public function saving(Booking $booking): void
+    {
+        if ($booking->isDirty(['student_count', 'rate'])) {
+            $booking->amount = $booking->student_count * $booking->rate;
+        }
+    }
+}
 
 
 // ============================================================
 // app/Providers/AppServiceProvider.php  (register observer)
 // ============================================================
+
+namespace App\Providers;
+
+use App\Models\Booking;
+use App\Observers\BookingObserver;
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function boot(): void
+    {
+        Booking::observe(BookingObserver::class);
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+OBSERVER HOOK ORDER
+-------------------
+• creating  → BEFORE INSERT  (new record only)
+• saving    → BEFORE INSERT or UPDATE  (every save)
+• created   → AFTER  INSERT  (new record only)
+• saved     → AFTER  INSERT or UPDATE  (every save)
+• updating  → BEFORE UPDATE  (existing record only)
+• updated   → AFTER  UPDATE  (existing record only)
+• deleting  → BEFORE DELETE
+• deleted   → AFTER  DELETE
+• full flow on create: creating → saving → created → saved
+• full flow on update: updating → saving → updated → saved
+
+BEFORE VS AFTER HOOKS
+---------------------
+• BEFORE hooks (creating, updating, saving, deleting)
+  - model not yet saved to DB
+  - you CAN modify $model attributes — they will be persisted
+  - getOriginal() returns the old DB value
+  - isDirty() returns true for changed attributes
+• AFTER hooks (created, updated, saved, deleted)
+  - model is already saved to DB
+  - modifying attributes does NOT persist (no auto-save)
+  - use for: cache clearing, notifications, dispatching events
+
+ISDIRTY() VS GETORIGINAL()
+---------------------------
+• isDirty('field')      → true if field was changed in this request
+• isDirty(['a', 'b'])   → true if ANY of the listed fields changed
+• getOriginal('field')  → the value from the DB BEFORE the change
+• $model->field         → the NEW value (what will be saved)
+• use BEFORE hooks — after save, dirty state is cleared
+
+CREATING() VS SAVING() — WHICH HOOK TO USE
+-------------------------------------------
+• creating() → one-time generation (reference number, UUID, slug)
+  - use when the value must be set ONCE on insert and never change
+• saving()   → computed fields that must stay in sync (amount = count × rate)
+  - use when the value depends on other fields that can change later
+• ❌ reference generation in saving() → regenerates on every update
+• ❌ amount calculation in creating() → ignores later student_count updates
+
+REFERENCE NUMBER GENERATION
+----------------------------
+• now()->format('Ym')  → '202603'  (year + zero-padded month)
+• whereYear + whereMonth → count resets each month
+• str_pad($count, 4, '0', STR_PAD_LEFT) → pads to 4 digits: 1 → '0001'
+• result: 'BK-202603-0001'
+
+NULL-SAFE OPERATOR
+------------------
+• $admin?->notify() → skips notify() if $admin is null
+• ❌ $admin->notify() → crashes with "Call to a member function on null"
+• always use ?-> when first() can return null
+
+OBSERVE() VS OBSERVER()
+------------------------
+• Booking::observe(BookingObserver::class)  ✅ correct
+• Booking::observer(BookingObserver::class) ❌ method does not exist
+
+ARTISAN
+-------
+• php artisan make:observer BookingObserver --model=Booking → generates stub
+• php artisan event:list → shows all registered observers and listeners
+
+================================================================
+*/

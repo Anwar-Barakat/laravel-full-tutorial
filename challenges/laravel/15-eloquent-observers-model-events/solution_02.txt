@@ -9,26 +9,361 @@
 // app/Traits/HasAuditLog.php
 // ============================================================
 
+namespace App\Traits;
+
+use App\Models\AuditLog;
+use App\Observers\AuditObserver;
+
+trait HasAuditLog
+{
+    // booted() runs after the full boot() chain — safe to use in traits
+    public static function booted(): void
+    {
+        static::observe(AuditObserver::class);
+    }
+
+    public function auditLogs()
+    {
+        return $this->morphMany(AuditLog::class, 'auditable');
+    }
+}
 
 
 // ============================================================
 // app/Observers/AuditObserver.php
 // ============================================================
 
+namespace App\Observers;
+
+use App\Models\AuditLog;
+use Illuminate\Database\Eloquent\Model;
+
+class AuditObserver
+{
+    // AFTER INSERT — record the initial state
+    public function created(Model $model): void
+    {
+        AuditLog::create([
+            'auditable_type' => $model->getMorphClass(), // respects morphMap; get_class() returns full namespace
+            'auditable_id'   => $model->id,
+            'event'          => 'created',
+            'before'         => null,
+            'after'          => $model->getAttributes(),  // all current field values
+            'user_id'        => auth()->id(),
+        ]);
+    }
+
+    // AFTER UPDATE — record what changed
+    public function updated(Model $model): void
+    {
+        AuditLog::create([
+            'auditable_type' => $model->getMorphClass(),
+            'auditable_id'   => $model->id,
+            'event'          => 'updated',
+            'before'         => $model->getOriginal(),  // snapshot of DB values before save
+            'after'          => $model->getChanges(),   // only the fields that changed (new values)
+            'user_id'        => auth()->id(),
+        ]);
+    }
+
+    // AFTER DELETE — record the final state before removal
+    public function deleted(Model $model): void
+    {
+        AuditLog::create([
+            'auditable_type' => $model->getMorphClass(),
+            'auditable_id'   => $model->id,
+            'event'          => 'deleted',
+            'before'         => $model->getOriginal(),
+            'after'          => null,
+            'user_id'        => auth()->id(),
+        ]);
+    }
+}
+
+
+// ============================================================
+// app/Observers/BookingObserver.php  (status transition guard)
+// ============================================================
+
+namespace App\Observers;
+
+use App\Exceptions\InvalidStatusTransitionException;
+use App\Models\Booking;
+use App\Models\User;
+use App\Notifications\BookingDeletedNotification;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
+
+class BookingObserver
+{
+    const TRANSITIONS = [
+        'pending'   => ['paid', 'cancelled'],
+        'paid'      => ['refunded'],
+        'cancelled' => [],
+        'refunded'  => [],
+    ];
+
+    // Fires BEFORE INSERT — generate reference number once on creation
+    public function creating(Booking $booking): void
+    {
+        $datePart = now()->format('Ym');  // '202603' — NOT 'Y-m' which gives '2026-03'
+
+        $count = Booking::whereYear('created_at', now()->year)
+            ->whereMonth('created_at', now()->month)
+            ->count() + 1;
+
+        $booking->reference = 'BK-' . $datePart . '-' . str_pad($count, 4, '0', STR_PAD_LEFT);
+    }
+
+    // Fires BEFORE UPDATE — validate status transition before it hits the DB
+    public function updating(Booking $booking): void
+    {
+        if ($booking->isDirty('status')) {
+            $old = $booking->getOriginal('status');
+            $new = $booking->status;
+
+            $allowed = self::TRANSITIONS[$old] ?? [];  // ?? [] guards against unknown statuses
+
+            if (!in_array($new, $allowed)) {
+                throw new InvalidStatusTransitionException($old, $new);
+            }
+
+            Log::info('Booking status changed', [
+                'booking_id' => $booking->id,
+                'from'       => $old,
+                'to'         => $new,
+            ]);
+        }
+    }
+
+    // Fires AFTER DELETE — clear cache and notify admin
+    public function deleted(Booking $booking): void
+    {
+        Cache::forget('booking:' . $booking->id);
+        Cache::tags(['school:' . $booking->school_id, 'bookings'])->flush();
+        Cache::tags(['dashboard'])->flush();
+
+        $admin = User::role('admin')->first();
+        $admin?->notify(new BookingDeletedNotification($booking));
+    }
+
+    // Fires BEFORE INSERT and UPDATE — keep computed amount in sync
+    public function saving(Booking $booking): void
+    {
+        if ($booking->isDirty(['student_count', 'rate'])) {
+            $booking->amount = $booking->student_count * $booking->rate;
+        }
+    }
+}
+
+
+// ============================================================
+// database/migrations/xxxx_xx_xx_create_audit_logs_table.php
+// ============================================================
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('audit_logs', function (Blueprint $table) {
+            $table->id();
+            $table->morphs('auditable');           // auditable_type + auditable_id + index
+            $table->string('event');               // 'created', 'updated', 'deleted'
+            $table->json('before')->nullable();
+            $table->json('after')->nullable();
+            $table->foreignId('user_id')->nullable()->constrained()->nullOnDelete();
+            $table->timestamps();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('audit_logs');
+    }
+};
 
 
 // ============================================================
 // app/Models/AuditLog.php
 // ============================================================
 
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class AuditLog extends Model
+{
+    protected $fillable = [
+        'auditable_type',
+        'auditable_id',
+        'user_id',
+        'event',
+        'before',
+        'after',
+    ];
+
+    protected $casts = [
+        'before' => 'array',
+        'after'  => 'array',
+    ];
+
+    public function auditable()
+    {
+        return $this->morphTo();
+    }
+}
+
+
+// ============================================================
+// app/Models/Booking.php
+// ============================================================
+
+namespace App\Models;
+
+use App\Traits\HasAuditLog;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+class Booking extends Model
+{
+    use SoftDeletes, HasAuditLog;
+
+    protected $fillable = [
+        'school_id', 'destination_id',
+        'student_count', 'amount', 'trip_date', 'status',
+    ];
+}
 
 
 // ============================================================
 // app/Exceptions/InvalidStatusTransitionException.php
 // ============================================================
 
+namespace App\Exceptions;
+
+class InvalidStatusTransitionException extends \Exception
+{
+    public function __construct(string $from, string $to)
+    {
+        parent::__construct(
+            "Cannot transition booking from '{$from}' to '{$to}'."
+        );
+    }
+}
 
 
 // ============================================================
-// app/Providers/AppServiceProvider.php  (static model events + observer order)
+// app/Providers/AppServiceProvider.php
 // ============================================================
+
+namespace App\Providers;
+
+use App\Models\Booking;
+use App\Models\Payment;
+use App\Models\School;
+use App\Observers\BookingObserver;
+use Illuminate\Database\Eloquent\Relations\Relation;
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function boot(): void
+    {
+        // Map short morph aliases — getMorphClass() returns 'booking' not full namespace
+        Relation::enforceMorphMap([
+            'booking' => Booking::class,
+            'payment' => Payment::class,
+            'school'  => School::class,
+        ]);
+
+        // Register observer
+        Booking::observe(BookingObserver::class);
+
+        // Suppress observer during bulk imports — prevents side effects in seeders/migrations
+        // Booking::withoutObserver(BookingObserver::class, function () {
+        //     foreach ($rows as $row) {
+        //         Booking::create($row); // observer suppressed — but timestamps + casting still work
+        //         // Booking::insert($row); // faster, but also skips timestamps, casting, events
+        //     }
+        // });
+
+        // Alternative: static model event (inline, no observer class needed)
+        // Booking::creating(fn($b) => $b->reference ??= 'BK-' . now()->format('Ym'));
+    }
+}
+
+
+/*
+================================================================
+TIPS — PROBLEM 02
+================================================================
+
+HAS AUDIT LOG TRAIT
+--------------------
+• Attach audit logging to any model with `use HasAuditLog`
+• booted() — static hook called after parent boot() chain, safe to use in traits
+• static::observe(AuditObserver::class) inside booted() auto-registers the observer
+• morphMany(AuditLog::class, 'auditable') → one log table shared across all models
+• ❌ boot() → can override parent and break things; booted() → always extends safely
+
+MORPH MAP — getMorphClass() vs get_class()
+-------------------------------------------
+• getMorphClass() → returns the alias from morphMap: 'booking', 'payment', 'school'
+• get_class($model) → returns full namespace: 'App\Models\Booking'
+• Relation::enforceMorphMap([...]) — register aliases in AppServiceProvider::boot()
+• Use getMorphClass() — if you rename a namespace later, DB records still match
+• ❌ get_class() → tightly couples DB values to namespace — breaks on refactor
+
+AUDIT OBSERVER — WHAT DATA TO CAPTURE
+---------------------------------------
+• created:  before = null,                  after = getAttributes()   (all current fields)
+• updated:  before = getOriginal(),         after = getChanges()      (only changed fields)
+• deleted:  before = getOriginal(),         after = null
+• getAttributes()  → all field values as they are now
+• getOriginal()    → all DB values before this request modified them
+• getChanges()     → only the fields that changed, with their new values
+• getOriginal() vs getChanges(): original = full before snapshot, changes = delta after
+
+STATUS TRANSITION GUARD
+------------------------
+• TRANSITIONS constant maps each status to its allowed next states
+• self::TRANSITIONS[$old] ?? [] → safely returns [] for unknown/unexpected statuses
+• Throwing in updating() (BEFORE hook) cancels the save — DB is never modified
+• InvalidStatusTransitionException extends \Exception — catch in ExceptionHandler
+• Example: pending→paid ✅  pending→refunded ❌  paid→cancelled ❌
+
+WITHOUTOBSERVER()
+------------------
+• Booking::withoutObserver(BookingObserver::class, fn() => ...) — suppresses the observer
+  inside the closure; useful for seeders, data migrations, bulk imports
+• create() INSIDE withoutObserver  → observer suppressed, but timestamps + casting still work
+• create() OUTSIDE withoutObserver → full lifecycle: creating() → saving() → created() → saved()
+• insert() anywhere               → bypasses Eloquent entirely (no observer, no timestamps, no casting)
+• use withoutObserver + create() when you still need timestamps/casting but want no side effects
+• use insert() only when raw speed matters and you handle timestamps manually
+
+POLYMORPHIC AUDIT LOG TABLE
+-----------------------------
+• $table->morphs('auditable') → creates auditable_type + auditable_id + composite index
+• auditable_type stores the morph alias ('booking') if morphMap is used
+• morphMany(AuditLog::class, 'auditable') in the model → "I have many audit logs"
+• morphTo() in AuditLog → "I belong to whatever auditable_type points to"
+• One migration, one table — reusable for Booking, Payment, School, etc.
+
+BOOTED() VS BOOT()
+-------------------
+• boot()   → static, runs once per class load, overrides parent — risky in traits
+• booted() → static, runs after the full boot() chain, extends parent — safe in traits
+• Rule: always use booted() in traits to avoid breaking parent boot logic
+
+ARTISAN
+-------
+• php artisan make:observer AuditObserver --model=Booking → generates stub
+• php artisan event:list → shows all registered observers and listeners
+
+================================================================
+*/
