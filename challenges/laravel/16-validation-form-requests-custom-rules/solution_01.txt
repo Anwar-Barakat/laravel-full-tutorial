@@ -9,14 +9,190 @@
 // app/Rules/AvailableSpotsRule.php
 // ============================================================
 
+namespace App\Rules;
+
+use App\Models\Destination;
+use Closure;
+use Illuminate\Contracts\Validation\ValidationRule;
+
+class AvailableSpotsRule implements ValidationRule
+{
+    public function __construct(private readonly int $studentCount) {}
+
+    // $value = destination_id (the field this rule is attached to)
+    public function validate(string $attribute, mixed $value, Closure $fail): void
+    {
+        $destination = Destination::find($value);
+
+        if ($destination->capacity < $this->studentCount) {
+            $fail('The destination does not have enough capacity for this student count.');
+        }
+    }
+}
 
 
 // ============================================================
 // app/Rules/SchoolBookingLimitRule.php
 // ============================================================
 
+namespace App\Rules;
+
+use App\Models\Booking;
+use Closure;
+use Illuminate\Contracts\Validation\ValidationRule;
+
+class SchoolBookingLimitRule implements ValidationRule
+{
+    // $value = school_id (the field this rule is attached to)
+    public function validate(string $attribute, mixed $value, Closure $fail): void
+    {
+        $count = Booking::where('school_id', $value)
+            ->whereYear('created_at', now()->year)
+            ->whereMonth('created_at', now()->month)
+            ->count();
+
+        if ($count >= 3) {
+            $fail('This school has reached the maximum of 3 bookings this month.');
+        }
+    }
+}
 
 
 // ============================================================
 // app/Http/Requests/StoreBookingRequest.php
 // ============================================================
+
+namespace App\Http\Requests;
+
+use App\Models\Booking;
+use App\Rules\AvailableSpotsRule;
+use App\Rules\SchoolBookingLimitRule;
+use Carbon\Carbon;
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Validator;
+
+class StoreBookingRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return $this->user()->can('create', Booking::class);
+    }
+
+    public function rules(): array
+    {
+        return [
+            'school_id'       => ['required', 'exists:schools,id', new SchoolBookingLimitRule()],
+            'destination_id'  => ['required', 'exists:destinations,id', new AvailableSpotsRule($this->input('student_count'))],
+            'student_count'   => ['required', 'integer', 'min:1', 'max:299'],
+            'trip_date'       => ['required', 'date_format:Y-m-d', 'after:today'],
+            'type'            => ['required', 'in:standard,international'],
+            'passport_copies' => ['required_if:type,international'],  // only required for international
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'trip_date.after'             => 'The trip date must be a future date.',
+            'passport_copies.required_if' => 'Passport copies are required for international trips.',
+        ];
+    }
+
+    // Runs after all rules pass — use for cross-field validation
+    public function after(): array
+    {
+        return [
+            function (Validator $validator) {
+                $date = Carbon::parse($this->trip_date);
+                if ($date->isWeekend()) {
+                    $validator->errors()->add('trip_date', 'Trips cannot be scheduled on weekends.');
+                }
+            },
+        ];
+    }
+}
+
+
+/*
+================================================================
+TIPS — PROBLEM 01
+================================================================
+
+FORM REQUEST STRUCTURE
+-----------------------
+• rules() → return array of field => [rules]
+• messages() → override default Laravel error messages per rule
+• after() → run extra validation after all rules pass (cross-field checks)
+
+CUSTOM RULE OBJECTS
+--------------------
+• implement ValidationRule (Laravel 10+ style — replaces old Rule interface)
+• validate(string $attribute, mixed $value, Closure $fail): void
+  - $attribute = field name ('destination_id', 'school_id')
+  - $value     = the submitted value for that field
+  - $fail()    = call this to mark the field as invalid with a message
+• inject dependencies via constructor (e.g. studentCount from another field)
+• ❌ return false — old style; ✅ call $fail() — new style
+
+PASSING DATA BETWEEN FIELDS IN RULES
+--------------------------------------
+• Custom rule is instantiated inside rules() — $this is the FormRequest
+• $this->input('student_count') or $this->student_count → access other fields
+• Pass to constructor: new AvailableSpotsRule($this->input('student_count'))
+• AvailableSpotsRule stores it as private $studentCount for use in validate()
+
+CONDITIONAL VALIDATION
+-----------------------
+• required_if:field,value  → required only when another field equals a value
+  - 'passport_copies' => ['required_if:type,international']
+• sometimes            → only validate if the field is present in the request
+• required_unless:field,value → required unless another field equals a value
+• when() → programmatic conditional (inside withValidator or after)
+
+DATE RULES
+-----------
+• 'date_format:Y-m-d'  → must match exact format '2026-06-15'
+• 'after:today'        → must be a future date (tomorrow or later)
+• 'after:trip_date'    → must be after another field's value
+• ❌ 'date:format(Y-m-d)' → not valid syntax
+
+AFTER() HOOK — CROSS-FIELD VALIDATION
+---------------------------------------
+• after() returns an array of closures (or invokable classes)
+• each closure receives a Validator instance
+• use $validator->errors()->add('field', 'message') to add errors
+• runs only after all individual field rules pass
+• use for: weekend check, date range check, business logic that spans fields
+• Carbon::parse($date)->isWeekend() → true if Saturday or Sunday
+
+MESSAGES() — CUSTOM ERROR MESSAGES
+-------------------------------------
+• key format: 'field.rule' → 'trip_date.after', 'school_id.exists'
+• overrides only the specified rule message for that field
+• all other messages fall back to Laravel defaults
+• for custom Rule objects, use $fail('message') directly — no messages() entry needed
+
+EXISTS RULE
+-----------
+• 'exists:table,column' → checks the value exists in the DB
+• 'exists:schools,id'   → school_id must be a valid school
+• runs before custom rules — if exists fails, custom rule is skipped
+
+AFTER() VS CUSTOM RULE OBJECT
+-------------------------------
+• after() runs AFTER all rules() pass — guarantees the value is already valid
+• use after() when: logic spans multiple fields, or check depends on other rules passing first
+  - Carbon::parse($this->trip_date) is safe in after() because date_format already validated it
+  - calling Carbon::parse() in a rule object risks crashing on invalid/null input
+• use a Rule object when: constraint is reusable and applies to one field in isolation
+• Rule object order matters — Laravel stops at first failure on a field, so custom rule
+  only runs if all preceding rules (required, date_format, exists) already passed
+• Rule of thumb: format/existence rules → rules(); business logic across fields → after()
+
+ARTISAN
+-------
+• php artisan make:request StoreBookingRequest   → generates FormRequest stub
+• php artisan make:rule AvailableSpotsRule        → generates Rule stub
+
+================================================================
+*/

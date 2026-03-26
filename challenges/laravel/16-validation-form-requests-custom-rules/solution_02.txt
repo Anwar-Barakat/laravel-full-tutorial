@@ -6,17 +6,199 @@
 
 
 // ============================================================
-// app/Rules/ValidTripDateRule.php  (ValidationRule interface)
+// app/Rules/ValidTripDateRule.php
 // ============================================================
 
+namespace App\Rules;
+
+use App\Models\PublicHoliday;
+use Carbon\Carbon;
+use Closure;
+use Illuminate\Contracts\Validation\ValidationRule;
+
+class ValidTripDateRule implements ValidationRule
+{
+    // $value = trip_date string (already passed required + date_format rules before this runs)
+    public function validate(string $attribute, mixed $value, Closure $fail): void
+    {
+        $date = Carbon::parse($value);
+
+        // Check 1 — no weekends
+        if ($date->isWeekend()) {
+            $fail('The trip date cannot be on a weekend.');
+        }
+
+        // Check 2 — no public holidays (from DB)
+        $isHoliday = PublicHoliday::whereDate('date', $date)->exists();
+        if ($isHoliday) {
+            $fail('The trip date falls on a public holiday.');
+        }
+    }
+}
 
 
 // ============================================================
-// app/Http/Requests/StoreBookingRequest.php  (nested + files + hooks)
+// app/Http/Requests/StoreBookingRequest.php
 // ============================================================
 
+namespace App\Http\Requests;
+
+use App\Models\Booking;
+use App\Rules\ValidTripDateRule;
+use Carbon\Carbon;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Validation\Rule;
+
+class StoreBookingRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return $this->user()->can('create', Booking::class);
+    }
+
+    public function rules(): array
+    {
+        return [
+            // Nested array — validate each item with * wildcard
+            'passengers'                   => ['required', 'array', 'min:1'],
+            'passengers.*.name'            => ['required', 'string', 'max:255'],
+            'passengers.*.passport_number' => ['required', 'distinct'],  // no duplicates within array
+
+            // File upload — each file validated individually with *
+            'passport_copies'   => ['required', 'array', 'max:10'],
+            'passport_copies.*' => ['file', 'mimes:pdf,jpg,jpeg', 'max:2048'],  // max 2MB each
+
+            // Custom Rule via macro — reads like a built-in Laravel rule
+            'trip_date' => ['required', Rule::bookingDate()],
+        ];
+    }
+
+    // Runs BEFORE rules — sanitize/normalize raw input
+    protected function prepareForValidation(): void
+    {
+        $this->merge([
+            'phone' => preg_replace('/\s+/', '', $this->phone),  // "050 123 4567" → "0501234567"
+        ]);
+    }
+
+    // Runs AFTER rules pass — transform validated data for the controller
+    protected function passedValidation(): void
+    {
+        $this->replace([
+            'trip_date' => Carbon::parse($this->trip_date)->format('Y-m-d'),
+        ]);
+    }
+
+    // Override default Laravel validation error response — consistent API envelope
+    protected function failedValidation(Validator $validator): void
+    {
+        throw new HttpResponseException(response()->json([
+            'error' => [
+                'code'    => 422,
+                'message' => 'Validation failed.',
+                'errors'  => $validator->errors(),
+            ],
+        ], 422));
+    }
+}
 
 
 // ============================================================
 // app/Providers/AppServiceProvider.php  (Rule::bookingDate() macro)
 // ============================================================
+
+namespace App\Providers;
+
+use App\Rules\ValidTripDateRule;
+use Illuminate\Support\ServiceProvider;
+use Illuminate\Validation\Rule;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function boot(): void
+    {
+        // Register custom macro — Rule::bookingDate() returns a new ValidTripDateRule instance
+        // Usage: 'trip_date' => ['required', Rule::bookingDate()]
+        Rule::macro('bookingDate', fn () => new ValidTripDateRule());
+    }
+}
+
+
+/*
+================================================================
+TIPS — PROBLEM 02
+================================================================
+
+VALIDATIONTRIPDATE RULE — SAFE PARSING
+----------------------------------------
+• ValidTripDateRule runs AFTER 'required' and date_format rules
+• By the time validate() is called, $value is guaranteed to be a valid date string
+• Carbon::parse($value) is safe — no risk of parsing null or garbage
+• Multiple $fail() calls in one validate() → all failures collected, not just the first
+• ❌ return false — old style; ✅ call $fail('message') — Laravel 10+ style
+
+NESTED ARRAY VALIDATION — * WILDCARD
+--------------------------------------
+• 'passengers'       => ['required', 'array', 'min:1']  — validates the array itself
+• 'passengers.*.name'            → validates name for EACH item in the array
+• 'passengers.*.passport_number' → validates passport_number for EACH item
+• 'distinct' → no duplicate values within the array (e.g. two passengers same passport)
+• errors come back as: passengers.0.name, passengers.1.passport_number
+
+FILE UPLOAD VALIDATION
+-----------------------
+• 'passport_copies'   => ['array', 'max:10']   — max 10 files total
+• 'passport_copies.*' => ['file', 'mimes:pdf,jpg,jpeg', 'max:2048']
+• 'file'  → must be an uploaded file (not just a string)
+• 'mimes' → allowed file extensions: pdf, jpg, jpeg
+• 'max'   → max file size in kilobytes: 2048 = 2MB
+• ❌ 'max:2MB' → wrong syntax; ✅ 'max:2048' → kilobytes
+
+RULE MACRO — Rule::bookingDate()
+----------------------------------
+• Rule::macro('name', fn() => ...) — add a custom method to the Rule class
+• Registered in AppServiceProvider::boot() — available everywhere
+• Rule::bookingDate() returns new ValidTripDateRule() — just a shortcut
+• Reads like a built-in rule: Rule::exists(), Rule::unique(), Rule::bookingDate()
+• Benefit: if ValidTripDateRule constructor changes, update only the macro
+
+FORMREQUEST LIFECYCLE HOOKS
+-----------------------------
+• prepareForValidation() — runs BEFORE rules, modify $this with merge()/replace()
+  - merge(['field' => $value])   → overwrite specific fields, keep others
+  - replace(['field' => $value]) → same but replaces only the listed keys
+  - use for: trim strings, normalize phone, cast types before validation
+• passedValidation() — runs AFTER all rules pass
+  - transform data so controller gets clean, formatted values from validated()
+  - use for: format dates, cast IDs to integers, normalize casing
+• failedValidation() — runs WHEN any rule fails
+  - throw HttpResponseException to control the error response shape
+  - use for: consistent API error envelope across all endpoints
+• prepareForValidation vs passedValidation:
+  - prepare = input cleaning (messy → clean → rules)
+  - passed  = output formatting (valid → formatted → controller)
+
+PREG_REPLACE
+-------------
+• preg_replace($pattern, $replacement, $subject)
+• '/\s+/' → regex pattern: one or more whitespace characters (space, tab, newline)
+• '' → replace with empty string (delete matches)
+• "050 123 4567" → preg_replace('/\s+/', '', ...) → "0501234567"
+
+FAILEDVALIDATION — ERROR ENVELOPE
+------------------------------------
+• Default Laravel response: { "message": "...", "errors": { "field": ["..."] } }
+• Custom envelope:          { "error": { "code": 422, "message": "...", "errors": {...} } }
+• throw HttpResponseException — stops execution and returns JSON immediately
+• $validator->errors() → MessageBag — all field errors as { field: ["message"] }
+• Every FormRequest that overrides failedValidation returns the same shape automatically
+
+ARTISAN
+-------
+• php artisan make:request StoreBookingRequest → generates FormRequest stub
+• php artisan make:rule ValidTripDateRule      → generates Rule stub
+
+================================================================
+*/
