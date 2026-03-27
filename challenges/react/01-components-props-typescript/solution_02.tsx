@@ -7,28 +7,42 @@
 // ============================================================
 
 import React, { useEffect, useMemo, useState } from "react";
-import type {
-    Booking,
-    BookingStatus,
-} from "../01-components-props-typescript/solution_01";
 
-export type BookingAction = "view" | "edit" | "cancel";
-export interface FilterState {
+type BookingAction = "view" | "edit" | "cancel";
+
+type BookingStatus =
+    | "pending"
+    | "confirmed"
+    | "paid"
+    | "completed"
+    | "cancelled";
+
+interface Booking {
+    id: number;
+    reference: string;
+    schoolName: string;
+    destination: string;
+    amount: number;
+    status: BookingStatus;
+    tripDate: string;
+    studentCount: number;
+}
+interface FilterState {
     status: BookingStatus | "all";
     search: string;
     dateFrom: string;
     dateTo: string;
 }
 
-export type SortField = "tripDate" | "amount" | "schoolName";
-export type SortOrder = "asc" | "desc";
+type SortField = "tripDate" | "amount" | "schoolName";
+type SortOrder = "asc" | "desc";
 
-export interface SortState {
+interface SortState {
     field: SortField;
     order: SortOrder;
 }
 
-export interface BookingListProps {
+interface BookingListProps {
     bookings: Booking[];
     isLoading?: boolean;
     onBookingAction: (action: BookingAction, bookingId: number) => void;

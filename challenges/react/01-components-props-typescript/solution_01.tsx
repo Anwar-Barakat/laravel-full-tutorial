@@ -6,16 +6,16 @@
 // types/booking.ts
 // ============================================================
 
-export type BookingStatus =
+type BookingStatus =
     | "pending"
     | "confirmed"
     | "paid"
     | "completed"
     | "cancelled";
 
-export type BookingAction = "view" | "edit" | "cancel";
+type BookingAction = "view" | "edit" | "cancel";
 
-export interface Booking {
+interface Booking {
     id: number;
     reference: string;
     schoolName: string;
@@ -26,7 +26,7 @@ export interface Booking {
     studentCount: number;
 }
 
-export interface BookingCardProps {
+interface BookingCardProps {
     booking: Booking;
     onAction: (action: BookingAction, bookingId: number) => void;
     isLoading?: boolean;
