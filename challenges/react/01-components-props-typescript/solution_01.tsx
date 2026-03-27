@@ -2,7 +2,6 @@
 // Problem 01 — BookingCard Component
 // ============================================================
 
-
 // ============================================================
 // types/booking.ts
 // ============================================================
@@ -17,22 +16,21 @@ export type BookingStatus =
 export type BookingAction = "view" | "edit" | "cancel";
 
 export interface Booking {
-    id:           number;
-    reference:    string;
-    schoolName:   string;
-    destination:  string;
-    amount:       number;
-    status:       BookingStatus;
-    tripDate:     string;   // ISO date string e.g. "2026-06-15"
+    id: number;
+    reference: string;
+    schoolName: string;
+    destination: string;
+    amount: number;
+    status: BookingStatus;
+    tripDate: string; // ISO date string e.g. "2026-06-15"
     studentCount: number;
 }
 
 export interface BookingCardProps {
-    booking:    Booking;
-    onAction:   (action: BookingAction, bookingId: number) => void;
+    booking: Booking;
+    onAction: (action: BookingAction, bookingId: number) => void;
     isLoading?: boolean;
 }
-
 
 // ============================================================
 // components/BookingCard.tsx
@@ -41,17 +39,17 @@ export interface BookingCardProps {
 import React from "react";
 
 type BookingStatusValue = {
-    label:   string;
+    label: string;
     classes: string;
 };
 
 // outside component — doesn't depend on props/state, created once
 const statusConfig: Record<BookingStatus, BookingStatusValue> = {
-    pending:   { label: "Pending",   classes: "bg-yellow-100 text-yellow-800" },
-    confirmed: { label: "Confirmed", classes: "bg-blue-100 text-blue-800"   },
-    paid:      { label: "Paid",      classes: "bg-green-100 text-green-800"  },
-    completed: { label: "Completed", classes: "bg-gray-100 text-gray-800"   },
-    cancelled: { label: "Cancelled", classes: "bg-red-100 text-red-800"     },
+    pending: { label: "Pending", classes: "bg-yellow-100 text-yellow-800" },
+    confirmed: { label: "Confirmed", classes: "bg-blue-100 text-blue-800" },
+    paid: { label: "Paid", classes: "bg-green-100 text-green-800" },
+    completed: { label: "Completed", classes: "bg-gray-100 text-gray-800" },
+    cancelled: { label: "Cancelled", classes: "bg-red-100 text-red-800" },
 };
 
 function formatAmount(amount: number): string {
@@ -63,20 +61,27 @@ const BookingCard: React.FC<BookingCardProps> = ({
     onAction,
     isLoading = false,
 }) => {
-    if (isLoading) return <div className="animate-pulse bg-gray-100 rounded-lg h-40" />;
+    if (isLoading)
+        return <div className="animate-pulse bg-gray-100 rounded-lg h-40" />;
 
     const { label, classes } = statusConfig[booking.status];
-    const canEdit   = !["completed", "cancelled"].includes(booking.status);
+    const canEdit = !["completed", "cancelled"].includes(booking.status);
     const canCancel = ["pending", "confirmed"].includes(booking.status);
 
     return (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
             <div className="flex items-start justify-between">
                 <div>
-                    <h3 className="font-semibold text-gray-900">{booking.schoolName}</h3>
-                    <p className="text-sm text-gray-500">{booking.destination}</p>
+                    <h3 className="font-semibold text-gray-900">
+                        {booking.schoolName}
+                    </h3>
+                    <p className="text-sm text-gray-500">
+                        {booking.destination}
+                    </p>
                 </div>
-                <span className={`px-2 py-1 rounded-full text-xs font-medium ${classes}`}>
+                <span
+                    className={`px-2 py-1 rounded-full text-xs font-medium ${classes}`}
+                >
                     {label}
                 </span>
             </div>
@@ -84,7 +89,9 @@ const BookingCard: React.FC<BookingCardProps> = ({
             <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
                 <div>
                     <p className="text-gray-500">Amount</p>
-                    <p className="font-medium">{formatAmount(booking.amount)}</p>
+                    <p className="font-medium">
+                        {formatAmount(booking.amount)}
+                    </p>
                 </div>
                 <div>
                     <p className="text-gray-500">Students</p>
@@ -99,12 +106,18 @@ const BookingCard: React.FC<BookingCardProps> = ({
             </div>
 
             <div className="mt-4 flex gap-2">
-                <button onClick={() => onAction("view", booking.id)}>View</button>
+                <button onClick={() => onAction("view", booking.id)}>
+                    View
+                </button>
                 {canEdit && (
-                    <button onClick={() => onAction("edit", booking.id)}>Edit</button>
+                    <button onClick={() => onAction("edit", booking.id)}>
+                        Edit
+                    </button>
                 )}
                 {canCancel && (
-                    <button onClick={() => onAction("cancel", booking.id)}>Cancel</button>
+                    <button onClick={() => onAction("cancel", booking.id)}>
+                        Cancel
+                    </button>
                 )}
             </div>
         </div>
@@ -112,7 +125,6 @@ const BookingCard: React.FC<BookingCardProps> = ({
 };
 
 export default BookingCard;
-
 
 /*
 ================================================================
