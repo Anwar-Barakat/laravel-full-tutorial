@@ -209,11 +209,9 @@ Build two reusable utility hooks with TypeScript generics: `useDebounce<T>` debo
 ### Requirements
 
 1. `useDebounce<T>(value: T, delay: number): T` — `useEffect` sets a `setTimeout`; cleanup returns `clearTimeout`; returns `debouncedValue` state
-2. `useLocalStorage<T>(key: string, initialValue: T): [T, Setter<T>]` — reads from `localStorage` in lazy `useState` initialiser; writes on every `setValue` call
-3. `useLocalStorage` setter accepts both a direct value and an updater function `(prev: T) => T` (same API as `useState`)
-4. SSR safety: guard `typeof window === "undefined"` before accessing `localStorage`
-5. JSON parse errors: catch and return `initialValue` (corrupted storage should not crash the app)
-6. JSON stringify errors: catch and log — do not throw (circular refs, quota exceeded)
+2. `useLocalStorage<T>(key: string, initialValue: T): [T, (value: T) => void]` — reads from `localStorage` in lazy `useState` initialiser; saves automatically via `useEffect` on every state change
+3. JSON parse errors: catch and return `initialValue` (corrupted storage should not crash the app)
+4. JSON stringify errors: catch and log — do not throw (circular refs, quota exceeded)
 
 ### Expected Code
 
@@ -245,44 +243,37 @@ useEffect(() => {
 
 ```tsx
 // hooks/useLocalStorage.ts
-type Setter<T> = (value: T | ((prev: T) => T)) => void
+export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T) => void] {
 
-export function useLocalStorage<T>(key: string, initialValue: T): [T, Setter<T>] {
+  // Step 1 — read from localStorage on mount (once only)
   const [storedValue, setStoredValue] = useState<T>(() => {
-    // Lazy initialiser — runs once on mount only
-    if (typeof window === "undefined") return initialValue // SSR safety
-
     try {
-      const item = window.localStorage.getItem(key)
-      return item !== null ? (JSON.parse(item) as T) : initialValue
+      const item = localStorage.getItem(key)
+      return item !== null ? JSON.parse(item) as T : initialValue
     } catch {
-      return initialValue // corrupted JSON — fall back silently
+      return initialValue // corrupted data → use default
     }
   })
 
-  const setValue: Setter<T> = (value) => {
+  // Step 2 — save to localStorage whenever storedValue changes
+  useEffect(() => {
     try {
-      const valueToStore = value instanceof Function ? value(storedValue) : value
-      setStoredValue(valueToStore)
-
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(key, JSON.stringify(valueToStore))
-      }
+      localStorage.setItem(key, JSON.stringify(storedValue))
     } catch (err) {
-      // Quota exceeded, circular reference, etc. — log but don't throw
       console.error(`useLocalStorage: error writing key "${key}"`, err)
     }
-  }
+  }, [key, storedValue])
 
-  return [storedValue, setValue]
+  // Step 3 — return exactly like useState
+  return [storedValue, setStoredValue]
 }
 
 // Usage
 const [theme, setTheme]     = useLocalStorage<"light" | "dark">("theme", "light")
 const [filters, setFilters] = useLocalStorage<BookingFilters>("booking-filters", defaultFilters)
 
-// Updater function form (same as useState)
-setFilters((prev) => ({ ...prev, status: "paid" }))
+setTheme("dark")           // → state updates + useEffect saves to localStorage ✅
+setFilters({ ...filters, status: "paid" }) // → same ✅
 ```
 
 ### useDebounce — How the Cleanup Works
@@ -301,9 +292,7 @@ useEffect([debouncedSearch]) → API call fires once
 |----------|-----------|
 | Key not in localStorage | Returns `initialValue` |
 | Corrupted JSON | `JSON.parse` throws → returns `initialValue` |
-| Server-side rendering | `typeof window === "undefined"` → returns `initialValue` |
 | Quota exceeded on write | Caught, logged, state still updated in memory |
-| Updater function `(prev) => T` | `value instanceof Function` branch handles it |
 
 ### What We're Evaluating
 
@@ -311,4 +300,4 @@ useEffect([debouncedSearch]) → API call fires once
 - `clearTimeout` return in `useEffect` — without this, stale timers fire after unmount
 - Lazy `useState(() => ...)` initialiser — `localStorage` read happens once, not every render
 - `item !== null` check — distinguishes "key not set" from `"null"` stored string
-- `value instanceof Function` — mirrors `useState` setter API exactly
+- `useEffect([key, storedValue])` — saves to localStorage automatically on every state change
