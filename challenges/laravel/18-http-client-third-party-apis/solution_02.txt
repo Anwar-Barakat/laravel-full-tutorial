@@ -6,17 +6,229 @@
 
 
 // ============================================================
-// app/Providers/AppServiceProvider.php  (Http macros + globalMiddleware)
+// app/Exceptions/CircuitOpenException.php
 // ============================================================
 
+namespace App\Exceptions;
+
+class CircuitOpenException extends \RuntimeException {}
 
 
 // ============================================================
 // app/Services/CircuitBreaker.php
 // ============================================================
 
+namespace App\Services;
+
+use Illuminate\Support\Facades\Cache;
+
+class CircuitBreaker
+{
+    public function isOpen(string $service): bool
+    {
+        return Cache::get("circuit:{$service}:failures", 0) >= 3;
+    }
+
+    public function recordFailure(string $service): void
+    {
+        Cache::add("circuit:{$service}:failures", 0, 60);
+        Cache::increment("circuit:{$service}:failures");
+    }
+}
+
+
+// ============================================================
+// app/Providers/AppServiceProvider.php  (Http macros + globalMiddleware)
+// ============================================================
+
+namespace App\Providers;
+
+use App\Exceptions\CircuitOpenException;
+use App\Services\CircuitBreaker;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function boot(): void
+    {
+        // --- Macros ---
+
+        Http::macro('mamoPay', function () {
+            if (app(CircuitBreaker::class)->isOpen('mamopay')) {
+                throw new CircuitOpenException('MamoPay circuit is open — too many recent failures');
+            }
+
+            return Http::withToken(config('services.mamopay.secret'))
+                ->baseUrl(config('services.mamopay.url'));
+        });
+
+        Http::macro('stripe', function () {
+            return Http::withHeaders(['Stripe-Version' => '2023-10-16'])
+                ->withToken(config('services.stripe.secret'))
+                ->baseUrl(config('services.stripe.url'));
+        });
+
+        // --- Global Middleware: logging + circuit breaker failure tracking ---
+
+        Http::globalMiddleware(function (callable $handler) {
+            return function ($request, array $options) use ($handler) {
+                $start = microtime(true);
+
+                return $handler($request, $options)->then(
+                    // Success — log the request
+                    function ($response) use ($request, $start) {
+                        $ms = round((microtime(true) - $start) * 1000);
+                        Log::info("[API] {$request->getMethod()} {$request->getUri()} → {$response->getStatusCode()} ({$ms}ms)");
+                        return $response;
+                    },
+                    // Failure — record failure for circuit breaker
+                    function ($reason) use ($request) {
+                        if (str_contains((string) $request->getUri(), 'mamopay')) {
+                            app(CircuitBreaker::class)->recordFailure('mamopay');
+                        }
+                        return \GuzzleHttp\Promise\Create::rejectionFor($reason);
+                    }
+                );
+            };
+        });
+    }
+}
 
 
 // ============================================================
 // config/services.php  (mamopay + stripe keys)
 // ============================================================
+
+return [
+    'stripe' => [
+        'url'    => env('STRIPE_URL', 'https://api.stripe.com'),
+        'key'    => env('STRIPE_KEY'),
+        'secret' => env('STRIPE_SECRET'),
+    ],
+    'mamopay' => [
+        'url'    => env('MAMOPAY_URL', 'https://api.mamopay.com'),
+        'key'    => env('MAMOPAY_KEY'),
+        'secret' => env('MAMOPAY_SECRET'),
+    ],
+];
+
+
+// ============================================================
+// tests/Feature/HttpMacrosTest.php  (Http::fake)
+// ============================================================
+
+namespace Tests\Feature;
+
+use App\Exceptions\CircuitOpenException;
+use App\Services\CircuitBreaker;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
+use Tests\TestCase;
+
+class HttpMacrosTest extends TestCase
+{
+    public function test_mamopay_macro_sends_preconfigured_request(): void
+    {
+        Http::fake([
+            'api.mamopay.com/*' => Http::response(['id' => 'link_123'], 201),
+        ]);
+
+        $response = Http::mamoPay()->post('/links', ['amount' => 5000, 'title' => 'Booking #42']);
+
+        $this->assertEquals(201, $response->status());
+        Http::assertSent(fn ($r) =>
+            str_contains($r->url(), 'mamopay') &&
+            $r->method() === 'POST'
+        );
+    }
+
+    public function test_stripe_macro_sends_preconfigured_request(): void
+    {
+        Http::fake([
+            'api.stripe.com/*' => Http::response(['id' => 'pi_123'], 200),
+        ]);
+
+        $response = Http::stripe()->post('/v1/payment_intents', ['amount' => 500000]);
+
+        $this->assertEquals(200, $response->status());
+        Http::assertSent(fn ($r) =>
+            str_contains($r->url(), 'stripe') &&
+            $r->hasHeader('Stripe-Version')
+        );
+    }
+
+    public function test_mamopay_macro_throws_when_circuit_is_open(): void
+    {
+        Cache::put('circuit:mamopay:failures', 3, 60);
+
+        $this->expectException(CircuitOpenException::class);
+
+        Http::mamoPay();
+    }
+
+    public function test_circuit_breaker_records_failures(): void
+    {
+        $breaker = app(CircuitBreaker::class);
+
+        $breaker->recordFailure('mamopay');
+        $breaker->recordFailure('mamopay');
+
+        $this->assertFalse($breaker->isOpen('mamopay')); // 2 failures — still closed
+
+        $breaker->recordFailure('mamopay');
+
+        $this->assertTrue($breaker->isOpen('mamopay'));  // 3 failures — open
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+HTTP MACROS
+-----------
+• Http::macro('name', fn () => ...) registered in AppServiceProvider::boot()
+• the closure must RETURN a PendingRequest — otherwise Http::name() returns null
+  and any chained ->post() / ->get() will crash
+• macros run every time they are called — put checks (circuit breaker) inside
+  the closure, not outside it in boot()
+• baseUrl('https://...') prefixes all relative paths:
+    Http::mamoPay()->post('/links') → hits https://api.mamopay.com/links
+    without baseUrl you'd repeat the full URL on every call
+
+GLOBALMIDDLEWARE
+----------------
+• Http::globalMiddleware() runs on EVERY outgoing Http request in the app
+• uses Guzzle middleware shape — not the same as Laravel route middleware
+• $handler($request, $options) fires the actual request and returns a Promise
+• ->then(onSuccess, onFailure) — callbacks run after the response arrives
+• use microtime(true) for timing — multiply by 1000 to get milliseconds
+• to re-reject after handling a failure: GuzzleHttp\Promise\Create::rejectionFor($reason)
+
+CIRCUIT BREAKER PATTERN
+------------------------
+• goal: stop hammering a failing API — fail fast after N failures in a time window
+• Cache::add(key, 0, ttl) — sets the key to 0 ONLY if it doesn't exist yet (safe init)
+• Cache::increment(key)   — atomically increments by 1
+• the 60s TTL means the counter auto-resets — no manual reset needed
+• check happens in the MACRO (before building the request)
+• recording happens in MIDDLEWARE (after the response/failure comes back)
+• two separate concerns — macro = guard, middleware = observer
+
+SINGLE VS DOUBLE QUOTES IN PHP STRINGS
+----------------------------------------
+• 'circuit:{$service}:failures'  → literal string — $service is NOT replaced
+• "circuit:{$service}:failures"  → interpolated — $service is replaced with its value
+• rule: use double quotes whenever you need variable interpolation inside a string
+
+ARTISAN
+-------
+• php artisan make:provider AppServiceProvider    → generates provider stub
+• php artisan make:exception CircuitOpenException → generates exception stub
+
+================================================================
+*/

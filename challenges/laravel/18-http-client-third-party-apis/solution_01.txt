@@ -9,8 +9,181 @@
 // app/Services/DestinationApiService.php
 // ============================================================
 
+namespace App\Services;
+
+use Illuminate\Support\Facades\Http;
+
+class DestinationApiService
+{
+    public function getAll(): array
+    {
+        try {
+            $response = Http::withToken(config('services.destinations.token'))
+                ->retry(3, 100)
+                ->timeout(10)
+                ->get(config('services.destinations.url'))
+                ->throw();
+
+            return $response->json('data');
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Oops, failed to fetch data']);
+        }
+    }
+
+    public function getById(int $id): array
+    {
+        try {
+            $response = Http::withToken(config('services.destinations.token'))
+                ->retry(3, 100)
+                ->timeout(10)
+                ->get(config('services.destinations.url') . '/' . $id)
+                ->throw();
+
+            return $response->json('data');
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Oops, failed to fetch data']);
+        }
+    }
+
+    public function getMultiple(array $ids): array
+    {
+        try {
+            $responses = Http::pool(fn (\Illuminate\Http\Client\Pool $pool) =>
+                collect($ids)->map(fn ($id) =>
+                    $pool->withToken(config('services.destinations.token'))
+                        ->timeout(10)
+                        ->get(config('services.destinations.url') . '/' . $id)
+                )->all()
+            );
+
+            return collect($responses)->map(fn ($r) => $r->json('data'))->toArray();
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Oops, failed to fetch data']);
+        }
+    }
+}
 
 
 // ============================================================
 // tests/Feature/DestinationApiServiceTest.php  (Http::fake)
 // ============================================================
+
+namespace Tests\Feature;
+
+use Illuminate\Support\Facades\Http;
+use Tests\TestCase;
+use App\Services\DestinationApiService;
+
+class DestinationApiServiceTest extends TestCase
+{
+    public function test_get_all_returns_destinations(): void
+    {
+        Http::fake([
+            'api.destinations.com/*' => Http::response([
+                'data' => [['id' => 1, 'name' => 'Dubai']],
+            ], 200),
+        ]);
+
+        $service = app(DestinationApiService::class);
+        $result  = $service->getAll();
+
+        $this->assertEquals([['id' => 1, 'name' => 'Dubai']], $result);
+        Http::assertSent(fn ($request) => str_contains($request->url(), 'api.destinations.com'));
+        Http::assertSentCount(1);
+    }
+
+    public function test_get_by_id_returns_destination(): void
+    {
+        Http::fake([
+            'api.destinations.com/*' => Http::response([
+                'data' => ['id' => 42, 'name' => 'Dubai'],
+            ], 200),
+        ]);
+
+        $service = app(DestinationApiService::class);
+        $result  = $service->getById(42);
+
+        $this->assertEquals(['id' => 42, 'name' => 'Dubai'], $result);
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/42'));
+        Http::assertSentCount(1);
+    }
+
+    public function test_get_all_returns_error_on_failure(): void
+    {
+        Http::fake([
+            'api.destinations.com/*' => Http::response([], 500),
+        ]);
+
+        $service = app(DestinationApiService::class);
+        $result  = $service->getAll();
+
+        $this->assertArrayHasKey('message', $result->getData(true));
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+CHAIN ORDER
+-----------
+• config methods (withToken, retry, timeout) must come BEFORE the HTTP verb
+• Http::get() fires the request immediately and returns a Response
+• you cannot configure a request that has already been sent
+  WRONG:   Http::get(url)->withToken()->retry(3, 100)
+  CORRECT: Http::withToken()->retry(3, 100)->timeout(10)->get(url)
+
+->THROW() VS ->FAILED()
+-----------------------
+• by default Laravel's HTTP client does NOT throw on 4xx/5xx
+• ->throw()  chains onto the response — throws RequestException on failure
+• ->failed() returns true if the response was 4xx or 5xx (manual check)
+• use ->throw() inside a try/catch for clean, idiomatic error handling
+
+HTTP::POOL()
+------------
+• Http::pool() fires all requests concurrently and returns array<Response>
+• you cannot call ->json() on the array — map over it:
+    collect($responses)->map(fn ($r) => $r->json('data'))->toArray()
+• config methods (withToken, timeout) go on each $pool->... call inside
+  the closure — NOT chained on Http::pool() itself
+• Http::pool() is a static method — never chain it off a pending request
+
+->JSON() VARIANTS
+-----------------
+• ->json()        → full decoded PHP array
+• ->json('data')  → only the 'data' key — same as ->json()['data']
+• ->json()->data  → WRONG — json() returns an array, not an object (crash)
+
+HTTP::FAKE()
+------------
+• Http::fake() replaces the HTTP client — no real network call is made
+• also enables Http::assertSent() and Http::assertSentCount()
+• always call Http::fake() BEFORE instantiating or calling the service
+• URL patterns support wildcards: 'api.example.com/*'
+
+->ALL() VS ->TOARRAY() ON COLLECTIONS
+--------------------------------------
+• ->all()      → raw underlying PHP array, one level only (no recursion)
+• ->toArray()  → recursively converts Collection and any nested Collections
+• both give the same result when items are plain PHP arrays
+• use ->toArray() as safe default when unsure what's inside
+
+ASSERTIONS IN TESTS
+--------------------
+• $this->assertEquals($expected, $actual)       → exact value match (PHPUnit)
+• $this->assertArrayHasKey('key', $array)        → key exists in plain array
+• $this->assertCount(3, $result)                 → array has exactly 3 items
+• $response->assertJsonStructure([...])          → checks SHAPE only (keys exist)
+• $response->assertJsonFragment(['id' => 1])     → partial match in JSON response
+• rule: use $this->assert*() for service return values (plain arrays/values)
+        use $response->assert*() for HTTP test responses via $this->getJson()
+
+ARTISAN
+-------
+• php artisan make:service DestinationApiService  → creates the class file
+
+================================================================
+*/

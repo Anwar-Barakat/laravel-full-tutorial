@@ -8,7 +8,10 @@
       "Bash(cd:*)",
       "WebSearch",
       "WebFetch(domain:stitcher.io)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(ls -lh 01-eloquent-models-crud/solution_*.txt)",
+      "Bash(ls -lh 11-caching-redis-tags/solution_*.txt)",
+      "Bash(ls -lh 25-api-security-cors-sanitization/solution_*.txt)"
     ]
   }
 }
