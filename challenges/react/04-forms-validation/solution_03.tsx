@@ -272,5 +272,15 @@ RADIO GROUPS WITHOUT CONTROLLER
 • onChange={(e) => form.setData("booking_type", e.target.value)} — updates state
 • common mistake: value={form.data.booking_type} — all radios get the same value
 
+INERTIA VS LIVEWIRE — SAME SERVER VALIDATION, DIFFERENT WORLD
+---------------------------------------------------------------
+• Both validate on the server — but that's where the similarity ends
+• Livewire: form lives in PHP, server re-renders Blade on every change
+• Inertia:  form lives in React, Laravel only validates on submit
+• Livewire = PHP with JS sprinkled on top
+• Inertia  = React SPA with Laravel as the backend
+• Real-time validation (on keystroke) → Livewire
+• Full React component control + Laravel validation → Inertia
+
 ================================================================
 */
