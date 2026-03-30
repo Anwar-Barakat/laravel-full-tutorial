@@ -276,283 +276,232 @@ export function BookingFilters({ currentStatus, currentSearch }: BookingFiltersP
 
 ### Scenario
 
-Use Next.js Server Actions for form mutations: create and update bookings without API routes, with progressive enhancement (works without JavaScript).
+Use Next.js Server Actions with react-hook-form: shared Zod schema between client and server, client-side validation with `zodResolver`, server-side validation with `safeParse` + cross-field `.refine()`. Call server actions directly from `handleSubmit` — no FormData, no `useActionState`.
 
 ### Requirements
 
-1. `"use server"` action functions for create/update/delete
-2. `useFormState` hook for form state from server
-3. `useFormStatus` for pending state in submit button
-4. Redirect after successful mutation
-5. Revalidate cached data with `revalidatePath`/`revalidateTag`
-6. Show server-side validation errors in the form
-7. Progressive enhancement — form works without JS
+1. Single shared `BookingSchema` — used by `zodResolver` on the client AND `safeParse` on the server
+2. `"use server"` action functions for create/update/delete — accept typed data, not FormData
+3. `react-hook-form` + `zodResolver(BookingSchema)` — instant client-side validation including `.refine()`
+4. `useTransition` for non-blocking pending state while the server action runs
+5. Call server action directly: `await createBookingAction(data)` inside `startTransition`
+6. Server returns `ActionResult` on error — merge field errors into RHF via `setError`
+7. `revalidatePath` to purge RSC cache, then `redirect()` on success
 
 ### Expected Code
 
 ```tsx
-// app/bookings/actions.ts  — Server Actions file
-"use server"
+// lib/schemas/bookingSchema.ts  (shared — client AND server)
+import { z } from "zod"
 
-import { redirect }        from "next/navigation"
-import { revalidatePath, revalidateTag } from "next/cache"
-import { z }               from "zod"
-
-// ── Validation schema ────────────────────────────────────────
-const BookingSchema = z.object({
+// One schema for both — .refine() is pure JS, runs on client and server
+export const BookingSchema = z.object({
   school_id:     z.string().min(1, "School is required"),
   trip_type:     z.enum(["domestic", "international"]),
-  student_count: z.coerce.number().min(1).max(500),
+  student_count: z.coerce.number().min(1, "Min 1").max(500, "Max 500"),
   date_from:     z.string().min(1, "Start date required"),
   date_to:       z.string().min(1, "End date required"),
-})
+}).refine(
+  (data) => new Date(data.date_to) > new Date(data.date_from),
+  { message: "End date must be after start date", path: ["date_to"] }
+)
 
-// ── State shape returned to the client ──────────────────────
-export interface ActionState {
+export type BookingFormData = z.infer<typeof BookingSchema>
+```
+
+```tsx
+// app/bookings/actions.ts
+"use server"
+
+import { BookingSchema } from "@/lib/schemas/bookingSchema"
+import { redirect }      from "next/navigation"
+import { revalidatePath } from "next/cache"
+
+export interface ActionResult {
+  success: boolean
   errors:  Record<string, string[]>
   message: string | null
-  success: boolean
 }
 
-// ── Create action ────────────────────────────────────────────
-export async function createBookingAction(
-  prevState: ActionState,
-  formData:  FormData
-): Promise<ActionState> {
-  // Parse FormData into a plain object
-  const raw = Object.fromEntries(formData.entries())
-
-  // Validate with Zod
-  const parsed = BookingSchema.safeParse(raw)
+export async function createBookingAction(data: unknown): Promise<ActionResult> {
+  const parsed = BookingSchema.safeParse(data)
   if (!parsed.success) {
     return {
+      success: false,
       errors:  parsed.error.flatten().fieldErrors as Record<string, string[]>,
       message: "Validation failed",
-      success: false,
     }
   }
-
   try {
     await db.booking.create({ data: parsed.data })
-  } catch (e) {
-    return { errors: {}, message: "Database error", success: false }
+  } catch {
+    return { success: false, errors: {}, message: "Database error" }
   }
-
-  revalidatePath("/bookings")           // purge the list page cache
-  revalidateTag("bookings")             // purge any fetch() tagged "bookings"
-  redirect("/bookings")                 // server-side redirect (throws internally)
+  revalidatePath("/bookings")
+  redirect("/bookings")
 }
 
-// ── Update action ────────────────────────────────────────────
-export async function updateBookingAction(
-  prevState: ActionState,
-  formData:  FormData
-): Promise<ActionState> {
-  const id  = formData.get("id") as string
-  const raw = Object.fromEntries(formData.entries())
-
-  const parsed = BookingSchema.safeParse(raw)
+export async function updateBookingAction(id: number, data: unknown): Promise<ActionResult> {
+  const parsed = BookingSchema.safeParse(data)
   if (!parsed.success) {
     return {
+      success: false,
       errors:  parsed.error.flatten().fieldErrors as Record<string, string[]>,
       message: "Validation failed",
-      success: false,
     }
   }
-
-  await db.booking.update({ where: { id: Number(id) }, data: parsed.data })
-
+  await db.booking.update({ where: { id }, data: parsed.data })
   revalidatePath(`/bookings/${id}`)
   revalidatePath("/bookings")
   redirect(`/bookings/${id}`)
 }
 
-// ── Delete action (no form state needed) ────────────────────
-export async function deleteBookingAction(formData: FormData): Promise<void> {
-  const id = formData.get("id") as string
-  await db.booking.delete({ where: { id: Number(id) } })
+export async function deleteBookingAction(id: number): Promise<void> {
+  await db.booking.delete({ where: { id } })
   revalidatePath("/bookings")
   redirect("/bookings")
 }
 ```
 
 ```tsx
-// app/bookings/new/page.tsx  (Server Component — renders the client form)
-import { CreateBookingForm } from "@/components/CreateBookingForm"
-
-export const metadata = { title: "New Booking" }
-
-export default function NewBookingPage() {
-  return (
-    <div className="max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold mb-6">Create Booking</h1>
-      <CreateBookingForm />
-    </div>
-  )
-}
-```
-
-```tsx
-// components/CreateBookingForm.tsx  ("use client" — uses hooks)
+// components/CreateBookingForm.tsx  ("use client")
 "use client"
 
-import { useFormState } from "react-dom"
-import { createBookingAction, type ActionState } from "@/app/bookings/actions"
-import { SubmitButton } from "@/components/SubmitButton"
-
-const initialState: ActionState = { errors: {}, message: null, success: false }
+import { useTransition, useState }          from "react"
+import { useForm }                           from "react-hook-form"
+import { zodResolver }                       from "@hookform/resolvers/zod"
+import { BookingSchema, type BookingFormData } from "@/lib/schemas/bookingSchema"
+import { createBookingAction }               from "@/app/bookings/actions"
 
 export function CreateBookingForm() {
-  // useFormState wires the server action to local state
-  const [state, formAction] = useFormState(createBookingAction, initialState)
+  const [isPending, startTransition]      = useTransition()
+  const [serverMessage, setServerMessage] = useState<string | null>(null)
+
+  const { register, handleSubmit, setError, formState: { errors } } =
+    useForm<BookingFormData>({ resolver: zodResolver(BookingSchema) })
+
+  function onSubmit(data: BookingFormData) {
+    setServerMessage(null)
+    startTransition(async () => {
+      const result = await createBookingAction(data)
+      if (result && !result.success) {
+        setServerMessage(result.message)
+        Object.entries(result.errors).forEach(([field, messages]) => {
+          setError(field as keyof BookingFormData, { type: "server", message: messages[0] })
+        })
+      }
+    })
+  }
 
   return (
-    // action={formAction} — works with and without JavaScript (progressive enhancement)
-    <form action={formAction} className="space-y-4">
-      {state.message && !state.success && (
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 max-w-lg">
+      {serverMessage && (
         <div className="bg-red-50 border border-red-200 rounded p-3 text-red-700">
-          {state.message}
+          {serverMessage}
         </div>
       )}
 
       <div>
-        <label htmlFor="school_id" className="block text-sm font-medium mb-1">
-          School
-        </label>
-        <select
-          id="school_id"
-          name="school_id"     // ← name attr is how FormData collects values
-          className="w-full border rounded px-3 py-2"
-        >
+        <label className="block text-sm font-medium mb-1">School</label>
+        <select {...register("school_id")} className={`w-full border rounded px-3 py-2 ${errors.school_id ? "border-red-500" : "border-gray-300"}`}>
           <option value="">Select school…</option>
           <option value="1">Al Ain School</option>
           <option value="2">Dubai Academy</option>
         </select>
-        {state.errors.school_id && (
-          <p className="text-red-600 text-sm mt-1">{state.errors.school_id[0]}</p>
-        )}
+        {errors.school_id && <p className="text-red-600 text-sm mt-1">{errors.school_id.message}</p>}
       </div>
 
       <div>
         <label className="block text-sm font-medium mb-2">Trip Type</label>
         <div className="flex gap-4">
           {(["domestic", "international"] as const).map((type) => (
-            <label key={type} className="flex items-center gap-2">
-              <input type="radio" name="trip_type" value={type} />
+            <label key={type} className="flex items-center gap-2 text-sm">
+              <input type="radio" value={type} {...register("trip_type")} />
               {type.charAt(0).toUpperCase() + type.slice(1)}
             </label>
           ))}
         </div>
-        {state.errors.trip_type && (
-          <p className="text-red-600 text-sm mt-1">{state.errors.trip_type[0]}</p>
-        )}
+        {errors.trip_type && <p className="text-red-600 text-sm mt-1">{errors.trip_type.message}</p>}
       </div>
 
       <div>
-        <label htmlFor="student_count" className="block text-sm font-medium mb-1">
-          Student Count
-        </label>
-        <input
-          id="student_count"
-          name="student_count"
-          type="number"
-          min={1}
-          max={500}
-          className="w-full border rounded px-3 py-2"
-        />
-        {state.errors.student_count && (
-          <p className="text-red-600 text-sm mt-1">{state.errors.student_count[0]}</p>
-        )}
+        <label className="block text-sm font-medium mb-1">Student Count</label>
+        <input type="number" {...register("student_count")} className={`w-full border rounded px-3 py-2 ${errors.student_count ? "border-red-500" : "border-gray-300"}`} />
+        {errors.student_count && <p className="text-red-600 text-sm mt-1">{errors.student_count.message}</p>}
       </div>
 
       <div className="flex gap-4">
         <div className="flex-1">
-          <label htmlFor="date_from" className="block text-sm font-medium mb-1">From</label>
-          <input id="date_from" name="date_from" type="date" className="w-full border rounded px-3 py-2" />
-          {state.errors.date_from && (
-            <p className="text-red-600 text-sm mt-1">{state.errors.date_from[0]}</p>
-          )}
+          <label className="block text-sm font-medium mb-1">From</label>
+          <input type="date" {...register("date_from")} className={`w-full border rounded px-3 py-2 ${errors.date_from ? "border-red-500" : "border-gray-300"}`} />
+          {errors.date_from && <p className="text-red-600 text-sm mt-1">{errors.date_from.message}</p>}
         </div>
         <div className="flex-1">
-          <label htmlFor="date_to" className="block text-sm font-medium mb-1">To</label>
-          <input id="date_to" name="date_to" type="date" className="w-full border rounded px-3 py-2" />
-          {state.errors.date_to && (
-            <p className="text-red-600 text-sm mt-1">{state.errors.date_to[0]}</p>
-          )}
+          <label className="block text-sm font-medium mb-1">To</label>
+          <input type="date" {...register("date_to")} className={`w-full border rounded px-3 py-2 ${errors.date_to ? "border-red-500" : "border-gray-300"}`} />
+          {errors.date_to && <p className="text-red-600 text-sm mt-1">{errors.date_to.message}</p>}
         </div>
       </div>
 
-      <SubmitButton label="Create Booking" />
+      <button type="submit" disabled={isPending} className="w-full py-2 px-4 bg-blue-600 text-white rounded disabled:opacity-50">
+        {isPending ? "Creating…" : "Create Booking"}
+      </button>
     </form>
   )
 }
 ```
 
 ```tsx
-// components/SubmitButton.tsx  ("use client" — uses useFormStatus)
+// components/DeleteBookingButton.tsx  ("use client")
 "use client"
 
-import { useFormStatus } from "react-dom"
+import { useTransition }       from "react"
+import { deleteBookingAction } from "@/app/bookings/actions"
 
-interface SubmitButtonProps { label: string }
-
-// Must be a separate component — useFormStatus reads the PARENT form's status
-export function SubmitButton({ label }: SubmitButtonProps) {
-  const { pending } = useFormStatus()
+export function DeleteBookingButton({ bookingId }: { bookingId: number }) {
+  const [isPending, startTransition] = useTransition()
 
   return (
     <button
-      type="submit"
-      disabled={pending}
-      className="w-full py-2 px-4 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+      onClick={() => startTransition(() => deleteBookingAction(bookingId))}
+      disabled={isPending}
+      className="px-4 py-2 bg-red-600 text-white rounded disabled:opacity-50"
     >
-      {pending ? "Saving…" : label}
+      {isPending ? "Deleting…" : "Delete Booking"}
     </button>
   )
 }
 ```
 
-```tsx
-// Delete button — inline Server Action (alternative pattern)
-// components/DeleteBookingButton.tsx
-"use client"
-import { deleteBookingAction } from "@/app/bookings/actions"
-
-export function DeleteBookingButton({ bookingId }: { bookingId: number }) {
-  return (
-    <form action={deleteBookingAction}>
-      <input type="hidden" name="id" value={bookingId} />
-      <SubmitButton label="Delete Booking" />
-    </form>
-  )
-}
-```
-
-### Server Actions Mental Model
+### Flow
 
 ```
-Browser submits <form action={formAction}>
-  → Next.js POSTs to special Server Action endpoint
-  → createBookingAction(prevState, formData) runs on server
-  → On error: returns { errors, message } → useFormState updates UI
-  → On success: revalidatePath() clears cache → redirect() navigates
-  → No API route needed — the action IS the endpoint
+User submits form
+  → handleSubmit(onSubmit) — zodResolver(BookingSchema) validates including .refine
+  → fails: show errors inline, no network call
+  → passes: startTransition(async () => await createBookingAction(data))
+  → isPending = true — button disabled, UI stays responsive
+  → server: BookingSchema.safeParse(data) — same schema, validates again
+  → on error: returns ActionResult → setError merges into RHF fields
+  → on success: redirect() fires server-side → user navigates away
 ```
 
-### Progressive Enhancement
+### Validation Responsibility Table
 
-```
-With JavaScript:    useFormState intercepts submit → async action → optimistic UI update
-Without JavaScript: form POSTs normally → server action runs → full page redirect
-```
+| Rule | Where | Why |
+|------|-------|-----|
+| School required | Client + Server | Basic — both layers |
+| Student count 1–500 | Client + Server | Basic range |
+| date_to > date_from | Client + Server | `.refine()` — pure JS, same schema runs on both |
+| School at capacity | **Server only** | Needs DB query — split schema only for this |
+| Duplicate booking | **Server only** | Needs DB query — split schema only for this |
 
 ### What We're Evaluating
 
-- `"use server"` at file top — marks all exports as Server Actions
-- `useFormState(action, initialState)` — binds action return value to component state
-- `useFormStatus()` — must be in a **child** component of the form (not the form component itself)
-- `FormData` — server receives form values; `formData.get("field")` or `Object.fromEntries()`
-- `revalidatePath("/bookings")` — busts the RSC cache for that route segment
-- `revalidateTag("bookings")` — busts any `fetch(..., { next: { tags: ["bookings"] } })` cache
-- `redirect()` — throws internally (no try/catch around it); must be called outside try blocks
-- Progressive enhancement — `action={formAction}` on `<form>` works without JS
+- Single `BookingSchema` — `zodResolver(BookingSchema)` on client, `BookingSchema.safeParse(data)` on server
+- `.refine((data) => bool, { message, path })` — cross-field rule, runs on both sides
+- `useTransition` — `[isPending, startTransition]` for non-blocking server calls
+- `startTransition(async () => await serverAction(data))` — call action from `onSubmit`
+- `setError(field, { type: "server", message })` — server error appears inline in the correct field
+- `revalidatePath` — purges RSC cache after mutation
+- `redirect()` — throws internally, navigates on success
