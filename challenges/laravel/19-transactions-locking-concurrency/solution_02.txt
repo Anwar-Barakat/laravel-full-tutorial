@@ -8,3 +8,10 @@
 // ============================================================
 // tests/Feature/BookingConcurrencyTest.php
 // ============================================================
+
+class BookingTransactionTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_booking_not_created_if_payment_fails(){}
+}

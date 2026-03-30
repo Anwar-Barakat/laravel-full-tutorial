@@ -9,20 +9,178 @@
 // app/Exceptions/InsufficientSpotsException.php
 // ============================================================
 
+namespace App\Exceptions;
+
+class InsufficientSpotsException extends \RuntimeException {}
 
 
 // ============================================================
 // app/Exceptions/AlreadyPaidException.php
 // ============================================================
 
+namespace App\Exceptions;
+
+class AlreadyPaidException extends \RuntimeException {}
 
 
 // ============================================================
 // app/Services/BookingService.php  (transaction + lockForUpdate)
 // ============================================================
 
+namespace App\Services;
+
+use App\Exceptions\InsufficientSpotsException;
+use App\Models\Booking;
+use App\Models\Destination;
+use Illuminate\Support\Facades\DB;
+
+class BookingService
+{
+    public function createBooking(array $data): Booking
+    {
+        return DB::transaction(function () use ($data) {
+
+            // Lock the destination row — prevents concurrent spot deductions
+            $destination = Destination::lockForUpdate()->find($data['destination_id']);
+
+            // Check availability INSIDE the lock — not before the transaction
+            if ($destination->available_spots < $data['student_count']) {
+                throw new InsufficientSpotsException(
+                    "Not enough spots. Available: {$destination->available_spots}, requested: {$data['student_count']}"
+                );
+            }
+
+            // Create booking atomically
+            $booking = Booking::create($data);
+
+            // Decrement in a single SQL statement — avoids race condition
+            // UPDATE destinations SET available_spots = available_spots - N
+            $destination->decrement('available_spots', $data['student_count']);
+
+            return $booking;
+
+        }, 3); // Retry up to 3 times on deadlock
+    }
+}
 
 
 // ============================================================
 // app/Services/PaymentService.php  (double-payment guard)
 // ============================================================
+
+namespace App\Services;
+
+use App\Exceptions\AlreadyPaidException;
+use App\Models\Booking;
+use Illuminate\Support\Facades\DB;
+
+class PaymentService
+{
+    public function __construct(
+        public readonly PaymentGateway $gateway
+    ) {}
+
+    public function processPayment(Booking $booking): void
+    {
+        DB::transaction(function () use ($booking) {
+
+            // Re-fetch with lock — the passed $booking may be stale
+            // lockForUpdate prevents another request from reading/writing this row
+            $booking = Booking::lockForUpdate()->find($booking->id);
+
+            // Guard against double-payment
+            if ($booking->status === 'paid') {
+                throw new AlreadyPaidException("Booking #{$booking->id} is already paid.");
+            }
+
+            // Charge via gateway — if this throws, transaction rolls back
+            $this->gateway->charge($booking->amount, 'aed');
+
+            // Mark as paid
+            $booking->update([
+                'status'  => 'paid',
+                'paid_at' => now(),
+            ]);
+        });
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+DB::TRANSACTION()
+-----------------
+• wraps all operations in a single atomic unit (ACID — Atomicity)
+• if ANY exception is thrown inside, ALL changes are rolled back automatically
+• on success (no exception), changes are committed
+• retry on deadlock: DB::transaction($callback, 3) — retries up to 3 times
+  a deadlock happens when two transactions each wait for the other's lock
+• never do slow operations (API calls, emails) inside a transaction —
+  keep transactions short to avoid holding locks too long
+
+LOCKFORUPDATE() VS SHAREDLOCK()
+---------------------------------
+• lockForUpdate()  → I'm about to WRITE — nobody else can read or write this row
+  SQL: SELECT ... FOR UPDATE
+• sharedLock()     → I'm just READING — others can also read, but nobody can write
+  SQL: SELECT ... LOCK IN SHARE MODE
+
+• think of it like a document in an office:
+  sharedLock    → multiple people can read at the same time, but nobody can edit
+  lockForUpdate → only one person can hold it — nobody else can read OR write
+
+• concurrency behaviour:
+  A: sharedLock,    B: sharedLock    → ✅ both can read together
+  A: sharedLock,    B: lockForUpdate → ❌ B waits until A finishes
+  A: lockForUpdate, B: anything      → ❌ B waits until A commits
+
+• rule:
+  read then WRITE the same row → lockForUpdate()   (most common)
+  read only, need consistency  → sharedLock()      (rare)
+
+  // sharedLock — only reading the price, not updating destination
+  $destination = Destination::sharedLock()->find($id);
+  $price = $destination->base_price * $studentCount;
+
+  // lockForUpdate — reading spots AND decrementing after
+  $destination = Destination::lockForUpdate()->find($id);
+  $destination->decrement('available_spots', $count);
+
+WHY CHECK INSIDE THE LOCK
+---------------------------
+• checking availability BEFORE the transaction is a race condition:
+    Request A checks: 10 spots available ✅
+    Request B checks: 10 spots available ✅  ← both see same value
+    Request A books 10 spots
+    Request B books 10 spots ← now -10 spots (overbooking!)
+• checking INSIDE lockForUpdate() forces serial execution:
+    Request A locks destination, checks, books → commits
+    Request B waits for lock → re-reads 0 spots → throws InsufficientSpotsException
+
+DECREMENT() VS UPDATE()
+------------------------
+• $destination->decrement('available_spots', 10)
+  → single SQL: UPDATE destinations SET available_spots = available_spots - 10
+  → atomic — no race condition even without a lock
+• $destination->update(['available_spots' => $destination->available_spots - 10])
+  → reads the value in PHP first, then writes — race condition possible if
+    two requests read the same value before either writes
+• rule: always use decrement()/increment() for counters
+
+WHY RE-FETCH INSIDE PROCESSPAYMNET()
+--------------------------------------
+• the $booking passed as parameter may be stale (fetched seconds ago)
+• another request may have already paid it in the meantime
+• always re-fetch with lockForUpdate() inside the transaction to get the
+  latest DB state — then check status on the fresh copy
+
+ARTISAN
+-------
+• php artisan make:exception InsufficientSpotsException  → exception stub
+• php artisan make:service BookingService                → service stub
+
+================================================================
+*/
