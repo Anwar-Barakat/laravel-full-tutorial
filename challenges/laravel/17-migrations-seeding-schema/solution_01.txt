@@ -9,50 +9,396 @@
 // database/migrations/xxxx_create_schools_table.php
 // ============================================================
 
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('schools', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->string('email')->unique();
+            $table->string('phone')->nullable();
+            $table->string('city');
+            $table->string('country')->default('UAE');
+            $table->boolean('is_active')->default(true);
+            $table->timestamps();
+            $table->softDeletes();
+
+            $table->index('city');
+            $table->index('is_active');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('schools');
+    }
+};
 
 
 // ============================================================
 // database/migrations/xxxx_create_destinations_table.php
 // ============================================================
 
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('destinations', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->string('country');
+            $table->text('description')->nullable();
+            $table->integer('max_capacity');
+            $table->decimal('base_price', 10, 2);
+            $table->boolean('is_active')->default(true);
+            $table->timestamps();
+
+            $table->index('country');
+            $table->index('is_active');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('destinations');
+    }
+};
 
 
 // ============================================================
 // database/migrations/xxxx_create_school_destination_table.php
 // ============================================================
 
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('school_destination', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('school_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('destination_id')->constrained()->cascadeOnDelete();
+            $table->decimal('price_per_student', 10, 2);
+            $table->timestamps();
+
+            $table->unique(['school_id', 'destination_id']);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('school_destination');
+    }
+};
 
 
 // ============================================================
 // database/migrations/xxxx_create_bookings_table.php
 // ============================================================
 
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('bookings', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('school_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('destination_id')->constrained()->cascadeOnDelete();
+            $table->string('school_name');
+            $table->string('destination');
+            $table->integer('student_count');
+            $table->decimal('amount', 10, 2);
+            $table->date('trip_date');
+            $table->string('status')->default('pending'); // pending, paid, cancelled
+            $table->timestamp('paid_at')->nullable();
+            $table->timestamps();
+            $table->softDeletes();
+
+            $table->index(['school_id', 'status']);
+            $table->index(['status', 'trip_date']);
+            $table->index('trip_date');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('bookings');
+    }
+};
 
 
 // ============================================================
 // database/migrations/xxxx_create_payments_table.php
 // ============================================================
 
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('payments', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('booking_id')->constrained()->cascadeOnDelete();
+            $table->decimal('amount', 10, 2);
+            $table->string('currency')->default('AED');
+            $table->string('status')->default('pending'); // pending, completed, refunded
+            $table->string('provider')->default('stripe'); // stripe, mamopay
+            $table->string('provider_id')->nullable()->unique(); // external payment ID
+            $table->json('provider_response')->nullable();
+            $table->timestamp('paid_at')->nullable();
+            $table->timestamps();
+            $table->softDeletes();
+
+            $table->index(['booking_id', 'status']);
+            $table->index('provider_id');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('payments');
+    }
+};
 
 
 // ============================================================
 // database/factories/SchoolFactory.php
 // ============================================================
 
+namespace Database\Factories;
+
+use Illuminate\Database\Eloquent\Factories\Factory;
+
+class SchoolFactory extends Factory
+{
+    public function definition(): array
+    {
+        return [
+            'name'      => $this->faker->company() . ' School',
+            'email'     => $this->faker->unique()->companyEmail(),
+            'phone'     => $this->faker->phoneNumber(),
+            'city'      => $this->faker->randomElement(['Dubai', 'Abu Dhabi', 'Sharjah', 'Ajman']),
+            'country'   => 'UAE',
+            'is_active' => true,
+        ];
+    }
+
+    public function inactive(): static
+    {
+        return $this->state(['is_active' => false]);
+    }
+}
 
 
 // ============================================================
 // database/factories/BookingFactory.php  (with states)
 // ============================================================
 
+namespace Database\Factories;
+
+use App\Models\Destination;
+use App\Models\School;
+use Illuminate\Database\Eloquent\Factories\Factory;
+
+class BookingFactory extends Factory
+{
+    public function definition(): array
+    {
+        $school      = School::factory()->create();
+        $destination = Destination::inRandomOrder()->first()
+            ?? Destination::factory()->create();
+        $studentCount = $this->faker->numberBetween(10, 50);
+        $amount       = $studentCount * $this->faker->randomFloat(2, 100, 500);
+
+        return [
+            'school_id'      => $school->id,
+            'destination_id' => $destination->id,
+            'school_name'    => $school->name,
+            'destination'    => $destination->name,
+            'student_count'  => $studentCount,
+            'amount'         => $amount,
+            'trip_date'      => $this->faker->dateTimeBetween('+1 month', '+1 year'),
+            'status'         => 'pending',
+            'paid_at'        => null,
+        ];
+    }
+
+    public function paid(): static
+    {
+        return $this->state([
+            'status'  => 'paid',
+            'paid_at' => now(),
+        ]);
+    }
+
+    public function cancelled(): static
+    {
+        return $this->state([
+            'status'  => 'cancelled',
+            'paid_at' => null,
+        ]);
+    }
+
+    public function upcoming(): static
+    {
+        return $this->state([
+            'trip_date' => $this->faker->dateTimeBetween('+1 month', '+6 months'),
+        ]);
+    }
+
+    public function past(): static
+    {
+        return $this->state([
+            'trip_date' => $this->faker->dateTimeBetween('-1 year', '-1 month'),
+        ]);
+    }
+}
 
 
 // ============================================================
 // database/factories/PaymentFactory.php
 // ============================================================
 
+namespace Database\Factories;
+
+use App\Models\Booking;
+use Illuminate\Database\Eloquent\Factories\Factory;
+
+class PaymentFactory extends Factory
+{
+    public function definition(): array
+    {
+        return [
+            'booking_id'        => Booking::factory(),
+            'amount'            => $this->faker->randomFloat(2, 100, 5000),
+            'currency'          => 'AED',
+            'status'            => 'pending',
+            'provider'          => $this->faker->randomElement(['stripe', 'mamopay']),
+            'provider_id'       => $this->faker->uuid(),
+            'provider_response' => null,
+            'paid_at'           => null,
+        ];
+    }
+
+    public function completed(): static
+    {
+        return $this->state([
+            'status'  => 'completed',
+            'paid_at' => now(),
+        ]);
+    }
+
+    public function refunded(): static
+    {
+        return $this->state(['status' => 'refunded']);
+    }
+}
 
 
 // ============================================================
 // database/seeders/DatabaseSeeder.php
 // ============================================================
+
+namespace Database\Seeders;
+
+use App\Models\Booking;
+use App\Models\Destination;
+use App\Models\School;
+use Illuminate\Database\Seeder;
+
+class DatabaseSeeder extends Seeder
+{
+    public function run(): void
+    {
+        // 5 destinations
+        $destinations = Destination::factory(5)->create();
+
+        // 10 schools, each with 5–15 bookings, each booking with 1–3 payments
+        School::factory(10)->create()->each(function ($school) use ($destinations) {
+            $bookingCount = rand(5, 15);
+
+            Booking::factory($bookingCount)
+                ->paid()
+                ->create([
+                    'school_id'      => $school->id,
+                    'school_name'    => $school->name,
+                    'destination_id' => $destinations->random()->id,
+                ])
+                ->each(function ($booking) {
+                    $paymentCount = rand(1, 3);
+                    \App\Models\Payment::factory($paymentCount)
+                        ->completed()
+                        ->create(['booking_id' => $booking->id, 'amount' => $booking->amount / $paymentCount]);
+                });
+
+            // Attach destinations to school via pivot
+            $school->destinations()->attach(
+                $destinations->random(rand(2, 4))->pluck('id'),
+                ['price_per_student' => rand(100, 500)]
+            );
+        });
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+FOREIGN KEYS
+------------
+• foreignId('school_id')->constrained()->cascadeOnDelete()
+  - foreignId()    → creates an UNSIGNED BIGINT column named school_id
+  - constrained()  → adds FK constraint to schools.id (infers table from column name)
+  - cascadeOnDelete() → deletes child rows when parent is deleted
+• always define FK migrations AFTER the parent table migration
+• to reference a non-standard table: ->constrained('custom_table_name')
+
+COMPOUND INDEXES
+-----------------
+• $table->index(['school_id', 'status']) → one index on two columns together
+• use when queries filter/sort by both columns: WHERE school_id = ? AND status = ?
+• column ORDER matters — put the most selective column first
+• a compound index on [school_id, status] also covers queries on school_id alone
+  but NOT on status alone
+
+PIVOT TABLES
+------------
+• naming convention: alphabetical singular — school_destination (not destination_school)
+• extra columns (price_per_student) go directly in the pivot migration
+• sync() / attach() / detach() manage the relationship in code
+• attach() with extra data: $school->destinations()->attach($id, ['price_per_student' => 200])
+
+SOFT DELETES
+------------
+• $table->softDeletes() → adds deleted_at TIMESTAMP NULL column
+• use SoftDeletes trait in the Model
+• deleted rows are hidden from all queries by default
+• to include them: Model::withTrashed()->get()
+• to permanently delete: $model->forceDelete()
+
+FACTORY STATES
+--------------
+• ->state([...]) → override specific fields for a named variation
+• chain states: BookingFactory::new()->paid()->upcoming()->create()
+• states are merged — last state wins on conflicting keys
+
+SEEDER PATTERN
+--------------
+• each() → iterate over a collection and run a callback per item
+• rand(5, 15) inside each() → different count per school (realistic data)
+• always seed in dependency order: destinations → schools → bookings → payments
+
+ARTISAN
+-------
+• php artisan make:migration create_schools_table         → migration stub
+• php artisan make:factory SchoolFactory --model=School   → factory stub
+• php artisan make:seeder DatabaseSeeder                  → seeder stub
+• php artisan migrate:fresh --seed                        → reset + migrate + seed
+
+================================================================
+*/

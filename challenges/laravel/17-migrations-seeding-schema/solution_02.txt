@@ -9,20 +9,215 @@
 // database/migrations/xxxx_add_reference_to_bookings_table.php  (step 1: nullable)
 // ============================================================
 
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::table('bookings', function (Blueprint $table) {
+            // Step 1: add as nullable — safe on a live table, no backfill needed yet
+            $table->string('reference')->nullable()->after('id');
+        });
+
+        // Step 2: backfill existing rows before making it required
+        \DB::table('bookings')->whereNull('reference')->orderBy('id')->each(function ($booking) {
+            $month = \Carbon\Carbon::parse($booking->created_at)->format('Ym');
+            \DB::table('bookings')->where('id', $booking->id)->update([
+                'reference' => 'BK-' . $month . '-' . str_pad($booking->id, 4, '0', STR_PAD_LEFT),
+            ]);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::table('bookings', function (Blueprint $table) {
+            $table->dropColumn('reference');
+        });
+    }
+};
 
 
 // ============================================================
 // database/migrations/xxxx_make_reference_required_on_bookings.php  (step 3: not null)
 // ============================================================
 
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::table('bookings', function (Blueprint $table) {
+            // Step 3: all rows now have a value — safe to make required
+            $table->string('reference')->nullable(false)->unique()->change();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::table('bookings', function (Blueprint $table) {
+            $table->string('reference')->nullable()->change();
+        });
+    }
+};
 
 
 // ============================================================
 // database/migrations/xxxx_add_generated_and_fulltext_to_bookings.php
 // ============================================================
 
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::table('bookings', function (Blueprint $table) {
+            // Generated/stored column — computed by DB, no PHP needed
+            $table->decimal('amount_with_vat', 10, 2)
+                ->storedAs('amount * 1.05')
+                ->after('amount');
+
+            // Full-text index for search across school_name + destination
+            $table->fullText(['school_name', 'destination']);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::table('bookings', function (Blueprint $table) {
+            $table->dropFullText(['school_name', 'destination']);
+            $table->dropColumn('amount_with_vat');
+        });
+    }
+};
 
 
 // ============================================================
 // database/factories/BookingFactory.php  (sequences + states)
 // ============================================================
+
+namespace Database\Factories;
+
+use App\Models\Destination;
+use App\Models\School;
+use Illuminate\Database\Eloquent\Factories\Factory;
+
+class BookingFactory extends Factory
+{
+    public function definition(): array
+    {
+        $school       = School::factory();
+        $destination  = Destination::factory();
+        $studentCount = $this->faker->numberBetween(10, 50);
+
+        return [
+            'school_id'      => $school,
+            'destination_id' => $destination,
+            'school_name'    => $this->faker->company() . ' School',
+            'destination'    => $this->faker->city(),
+            'student_count'  => $studentCount,
+            'amount'         => $studentCount * $this->faker->randomFloat(2, 100, 500),
+            'trip_date'      => $this->faker->dateTimeBetween('+1 month', '+1 year'),
+            'status'         => 'pending',
+            'paid_at'        => null,
+            // reference generated via sequence when needed
+        ];
+    }
+
+    // --- States ---
+
+    public function paid(): static
+    {
+        return $this->state([
+            'status'  => 'paid',
+            'paid_at' => now(),
+        ]);
+    }
+
+    public function cancelled(): static
+    {
+        return $this->state(['status' => 'cancelled']);
+    }
+
+    public function upcoming(): static
+    {
+        return $this->state([
+            'trip_date' => $this->faker->dateTimeBetween('+1 month', '+6 months'),
+        ]);
+    }
+
+    public function past(): static
+    {
+        return $this->state([
+            'trip_date' => $this->faker->dateTimeBetween('-1 year', '-1 month'),
+        ]);
+    }
+
+    // --- Sequence usage (called from tests/seeders, not defined here) ---
+    //
+    // BookingFactory::new()->sequence(
+    //     fn ($seq) => ['reference' => 'BK-202603-' . str_pad($seq->index + 1, 4, '0', STR_PAD_LEFT)]
+    // )->count(10)->create();
+    //
+    // $seq->index = 0-based position in the sequence
+    // str_pad(1, 4, '0', STR_PAD_LEFT) → '0001'
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+ZERO-DOWNTIME MIGRATION (3-STEP PATTERN)
+------------------------------------------
+• never add a NOT NULL column without a default to a live table — it locks the table
+• step 1: add the column as nullable()  → instant, no lock
+• step 2: backfill existing rows        → run as a job or in the migration itself
+• step 3: ->nullable(false)->change()   → safe now because all rows have a value
+• doctrine/dbal package required for ->change(): composer require doctrine/dbal
+
+GENERATED / STORED COLUMNS
+----------------------------
+• ->storedAs('amount * 1.05') → DB computes and stores the value on INSERT/UPDATE
+• ->virtualAs('amount * 1.05') → DB computes on SELECT only (not stored on disk)
+• stored  = faster reads, uses disk space
+• virtual = slower reads, saves disk space
+• query like a normal column: Booking::where('amount_with_vat', '>', 5000)->get()
+• no PHP accessor needed — the DB handles it
+
+FULL-TEXT INDEXES
+-----------------
+• $table->fullText(['col1', 'col2']) → creates a FULLTEXT index (MySQL/MariaDB)
+• query with: Booking::whereFullText(['school_name', 'destination'], 'dubai')->get()
+• much faster than LIKE '%dubai%' on large tables
+• MySQL only — not available on SQLite (use whereRaw for testing)
+
+FACTORY SEQUENCES
+------------------
+• ->sequence(fn ($seq) => [...]) → callback runs once per model created
+• $seq->index → 0-based position (first model = 0, second = 1, ...)
+• str_pad($seq->index + 1, 4, '0', STR_PAD_LEFT) → '0001', '0002', ...
+• use for: predictable reference numbers, rotating statuses, test fixtures
+
+AFTER() COLUMN PLACEMENT
+--------------------------
+• ->after('column_name') → places the new column after the specified one (MySQL only)
+• cosmetic only — no performance impact
+• ignored on SQLite and PostgreSQL
+
+->CHANGE() REQUIREMENTS
+------------------------
+• requires doctrine/dbal package: composer require doctrine/dbal
+• only modifies the specified attributes — unspecified ones stay the same
+• always re-declare all modifiers when using change() to avoid unintended resets
+
+ARTISAN
+-------
+• php artisan make:migration add_reference_to_bookings_table  → migration stub
+• php artisan migrate                                          → run pending migrations
+• php artisan migrate:rollback                                 → undo last batch
+• php artisan migrate:status                                   → see migration status
+
+================================================================
+*/
