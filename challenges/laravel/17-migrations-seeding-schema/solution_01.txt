@@ -71,14 +71,14 @@ return new class extends Migration
 
 
 // ============================================================
-// database/migrations/xxxx_create_school_destination_table.php
+// database/migrations/xxxx_create_destination_school_table.php
 // ============================================================
 
 return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('school_destination', function (Blueprint $table) {
+        Schema::create('destination_school', function (Blueprint $table) {
             $table->id();
             $table->foreignId('school_id')->constrained()->cascadeOnDelete();
             $table->foreignId('destination_id')->constrained()->cascadeOnDelete();
@@ -91,7 +91,7 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::dropIfExists('school_destination');
+        Schema::dropIfExists('destination_school');
     }
 };
 
@@ -368,7 +368,8 @@ COMPOUND INDEXES
 
 PIVOT TABLES
 ------------
-• naming convention: alphabetical singular — school_destination (not destination_school)
+• naming convention: alphabetical singular — destination_school (not school_destination)
+  d comes before s → destination_school is what Laravel expects automatically
 • extra columns (price_per_student) go directly in the pivot migration
 • sync() / attach() / detach() manage the relationship in code
 • attach() with extra data: $school->destinations()->attach($id, ['price_per_student' => 200])
@@ -387,10 +388,27 @@ FACTORY STATES
 • chain states: BookingFactory::new()->paid()->upcoming()->create()
 • states are merged — last state wins on conflicting keys
 
+EACH() VS MAP()
+---------------
+• each()  → loop to DO something (side effects: DB writes, emails, etc.)
+  - return value inside the callback is IGNORED
+  - returns the ORIGINAL collection unchanged
+  - use when: creating related records, sending notifications
+• map()   → loop to TRANSFORM each item into something new
+  - return value inside the callback BECOMES the new item
+  - returns a NEW collection of the transformed values
+  - use when: extracting a field, reshaping data
+
+  $schools->each(fn ($s) => Booking::factory(5)->create(['school_id' => $s->id]));
+  // original $schools collection unchanged — bookings created as side effect
+
+  $names = $schools->map(fn ($s) => $s->name);
+  // new collection ['School A', 'School B', ...] — $schools unchanged
+
 SEEDER PATTERN
 --------------
-• each() → iterate over a collection and run a callback per item
-• rand(5, 15) inside each() → different count per school (realistic data)
+• each() → iterate and create related records per item (side effect, not transformation)
+• rand(5, 15) inside each() → different count per school (realistic varied data)
 • always seed in dependency order: destinations → schools → bookings → payments
 
 ARTISAN

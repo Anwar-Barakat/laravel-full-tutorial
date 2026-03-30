@@ -2,11 +2,11 @@
 
 Build Next.js pages with the App Router: server components, loading states, dynamic routes, layouts, and data fetching.
 
-| Topic           | Details                                                         |
-|-----------------|-----------------------------------------------------------------|
-| App Router      | layout.tsx, page.tsx, loading.tsx                               |
-| Server Components | RSC, async components, use server                             |
-| Dynamic Routes  | [id], searchParams, parallel                                    |
+| Topic             | Details                           |
+|-------------------|-----------------------------------|
+| App Router        | layout.tsx, page.tsx, loading.tsx |
+| Server Components | RSC, async components, use server |
+| Dynamic Routes    | [id], searchParams, parallel      |
 
 ## Rules
 
@@ -250,15 +250,15 @@ export function BookingFilters({ currentStatus, currentSearch }: BookingFiltersP
 
 ### Server vs Client Component Decision Table
 
-| File | Type | Why |
-|------|------|-----|
-| `layout.tsx` | Server | Static shell, no interactivity |
-| `page.tsx` | Server | Fetches data, no browser APIs |
-| `loading.tsx` | Server | Static skeleton |
-| `error.tsx` | **Client** | Uses `reset()` callback (event handler) |
-| `BookingFilters.tsx` | **Client** | `useRouter`, `onChange` handlers |
-| `BookingTable.tsx` | Server | Renders data, no interactivity |
-| `BookingDetailTabs.tsx` | **Client** | Tab switching state |
+| File                    | Type       | Why                                     |
+|-------------------------|------------|-----------------------------------------|
+| `layout.tsx`            | Server     | Static shell, no interactivity          |
+| `page.tsx`              | Server     | Fetches data, no browser APIs           |
+| `loading.tsx`           | Server     | Static skeleton                         |
+| `error.tsx`             | **Client** | Uses `reset()` callback (event handler) |
+| `BookingFilters.tsx`    | **Client** | `useRouter`, `onChange` handlers        |
+| `BookingTable.tsx`      | Server     | Renders data, no interactivity          |
+| `BookingDetailTabs.tsx` | **Client** | Tab switching state                     |
 
 ### What We're Evaluating
 
@@ -488,13 +488,13 @@ User submits form
 
 ### Validation Responsibility Table
 
-| Rule | Where | Why |
-|------|-------|-----|
-| School required | Client + Server | Basic — both layers |
-| Student count 1–500 | Client + Server | Basic range |
-| date_to > date_from | Client + Server | `.refine()` — pure JS, same schema runs on both |
-| School at capacity | **Server only** | Needs DB query — split schema only for this |
-| Duplicate booking | **Server only** | Needs DB query — split schema only for this |
+| Rule                  | Where           | Why                                             |
+|-----------------------|-----------------|-------------------------------------------------|
+| School required       | Client + Server | Basic — both layers                             |
+| Student count 1–500   | Client + Server | Basic range                                     |
+| date_to > date_from   | Client + Server | `.refine()` — pure JS, same schema runs on both |
+| School at capacity    | **Server only** | Needs DB query — split schema only for this     |
+| Duplicate booking     | **Server only** | Needs DB query — split schema only for this     |
 
 ### What We're Evaluating
 

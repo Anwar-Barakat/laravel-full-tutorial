@@ -185,13 +185,28 @@ GENERATED / STORED COLUMNS
 • virtual = slower reads, saves disk space
 • query like a normal column: Booking::where('amount_with_vat', '>', 5000)->get()
 • no PHP accessor needed — the DB handles it
+• storedAs() accepts any SQL expression — one column, two columns, or constants:
+    ->storedAs('amount * 1.05')                          // one column + constant
+    ->storedAs('student_count * price_per_student')      // ✅ two columns, same table
+    ->storedAs('(price * quantity) - discount_amount')   // ✅ multiple columns
+    ->storedAs("CONCAT(first_name, ' ', last_name)")     // ✅ string expression
+• only columns from the SAME table can be referenced:
+    ->storedAs('bookings.amount * destinations.vat_rate') // ❌ cross-table = invalid
 
 FULL-TEXT INDEXES
 -----------------
-• $table->fullText(['col1', 'col2']) → creates a FULLTEXT index (MySQL/MariaDB)
+• $table->fullText(['school_name', 'destination']) → one index covering both columns
 • query with: Booking::whereFullText(['school_name', 'destination'], 'dubai')->get()
-• much faster than LIKE '%dubai%' on large tables
-• MySQL only — not available on SQLite (use whereRaw for testing)
+  searches across BOTH columns at once in a single query
+• much faster than LIKE '%dubai%' — uses the index instead of scanning every row
+• passing two columns means it matches if the term appears in EITHER column:
+    school_name = "Dubai Marina School"  ✅
+    destination = "Dubai Marina Beach"   ✅
+• key differences vs LIKE:
+    LIKE '%dub%'     → partial word match ✅, slow full scan ❌
+    whereFullText()  → full words only ✅, fast index lookup ✅, MySQL only ⚠️
+• minimum word length is 3 characters by default in MySQL
+• SQLite (used in tests) does NOT support fullText — use LIKE as fallback in tests
 
 FACTORY SEQUENCES
 ------------------
