@@ -9,9 +9,126 @@
 // tests/Feature/BookingConcurrencyTest.php
 // ============================================================
 
+namespace Tests\Feature;
+
+use App\Exceptions\AlreadyPaidException;
+use App\Exceptions\InsufficientSpotsException;
+use App\Models\Booking;
+use App\Models\Destination;
+use App\Services\BookingService;
+use App\Services\PaymentGateway;
+use App\Services\PaymentService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\TestCase;
+
 class BookingTransactionTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_booking_not_created_if_payment_fails(){}
+    // Test 1 — double-payment guard
+    public function test_booking_cannot_be_paid_twice(): void
+    {
+        // Create a booking that is already paid
+        $booking = Booking::factory()->paid()->create();
+
+        $this->expectException(AlreadyPaidException::class);
+
+        app(PaymentService::class)->processPayment($booking);
+    }
+
+    // Test 2 — capacity check prevents overbooking
+    public function test_concurrent_bookings_respect_capacity(): void
+    {
+        $destination = Destination::factory()->create(['available_spots' => 30]);
+
+        $data = [
+            'destination_id' => $destination->id,
+            'student_count'  => 20,
+            'school_name'    => 'Test School',
+        ];
+
+        // First booking — 20 of 30 spots used, should succeed
+        app(BookingService::class)->createBooking($data);
+
+        // Second booking — would use 40 of 30 spots, must throw
+        $this->expectException(InsufficientSpotsException::class);
+        app(BookingService::class)->createBooking($data);
+    }
+
+    // Test 3 — transaction rollback: gateway failure must not update booking status
+    public function test_payment_status_not_updated_if_gateway_fails(): void
+    {
+        $booking = Booking::factory()->create(['status' => 'pending']);
+
+        // Mock gateway to always throw
+        $this->mock(PaymentGateway::class)
+            ->shouldReceive('charge')
+            ->andThrow(new \Exception('Gateway down'));
+
+        try {
+            app(PaymentService::class)->processPayment($booking);
+        } catch (\Exception $e) {
+            // expected — gateway threw, transaction rolled back
+        }
+
+        // Status must still be pending — the update was rolled back
+        $this->assertDatabaseHas('bookings', [
+            'id'     => $booking->id,
+            'status' => 'pending',
+        ]);
+    }
 }
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+REFRESHDATABASE TRAIT
+----------------------
+• use RefreshDatabase in test classes that touch the database
+• wraps each test in a transaction and rolls it back after — DB is clean per test
+• alternative: use DatabaseTransactions (same effect, different mechanism)
+• without it: data from one test leaks into the next → unpredictable failures
+
+EXPECTEXCEPTION()
+-----------------
+• $this->expectException(SomeException::class) → tells PHPUnit the next statement
+  MUST throw that exception — test passes if it does, fails if it doesn't
+• must be called BEFORE the line that throws
+• only covers the NEXT throwable statement — not the whole test method
+
+ASSERTDATABASEHAS / ASSERTDATABASEMISSING
+------------------------------------------
+• assertDatabaseHas('table', ['col' => 'value'])    → row exists in DB
+• assertDatabaseMissing('table', ['col' => 'value']) → row does NOT exist in DB
+• use after a transaction rollback to verify nothing was persisted
+• use after a successful operation to confirm the record was saved
+
+MOCKING WITH $THIS->MOCK()
+----------------------------
+• $this->mock(ClassName::class) → replaces the class in Laravel's container
+• ->shouldReceive('method') → defines which method to intercept
+• ->andThrow(new Exception()) → forces the method to throw
+• ->andReturn($value)        → forces the method to return a value
+• ->once() / ->times(2)      → assert the method was called N times
+• the mock is automatically resolved when app(ClassName::class) is called
+  because it replaces the binding in the service container
+
+TESTING TRANSACTION ROLLBACK
+------------------------------
+• to test rollback: mock a dependency to throw AFTER some DB writes happen
+• wrap the call in try/catch so the test doesn't fail on the exception
+• then assert the DB state is unchanged — the writes were rolled back
+• assertDatabaseHas with the original value confirms the update was undone
+
+RUNTIMEEXCEPTION VS EXCEPTION
+-------------------------------
+• extending RuntimeException signals an expected business failure at runtime
+• catch specifically: catch (InsufficientSpotsException $e) → handle gracefully
+• catch broadly:     catch (\Exception $e) → last resort fallback
+• named exceptions make catch blocks precise — no string matching needed
+
+================================================================
+*/
