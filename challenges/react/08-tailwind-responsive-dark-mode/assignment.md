@@ -36,35 +36,21 @@ Build a complete responsive booking dashboard with Tailwind: stat cards, data ta
 
 ### Expected Code
 
-```tsx
-// tailwind.config.ts
-import type { Config } from "tailwindcss"
+```css
+/* src/index.css — Tailwind v4 (no tailwind.config.ts needed) */
+@import "tailwindcss";
 
-export default {
-  // "class" strategy: dark mode toggled by adding .dark to <html>
-  // "media" strategy: follows OS preference automatically
-  darkMode: "class",
+/* Class-based dark mode — toggle .dark on <html> */
+@custom-variant dark (&:where(.dark, .dark *));
 
-  content: ["./src/**/*.{ts,tsx}"],
-
-  theme: {
-    extend: {
-      colors: {
-        // Design token: use semantic names, not raw colors
-        brand: {
-          50:  "#eff6ff",
-          500: "#3b82f6",
-          600: "#2563eb",
-          700: "#1d4ed8",
-        },
-      },
-      fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
-      },
-    },
-  },
-  plugins: [],
-} satisfies Config
+/* Custom design tokens — generates utility classes automatically */
+@theme {
+  --color-brand-50:  #eff6ff;
+  --color-brand-500: #3b82f6;
+  --color-brand-600: #2563eb;
+  --color-brand-700: #1d4ed8;
+  --font-sans: "Inter", system-ui, sans-serif;
+}
 ```
 
 ```tsx
@@ -790,14 +776,11 @@ export function StaggeredList<T>({ items, renderItem, keyFn }: StaggeredListProp
   )
 }
 
-// tailwind.config.ts — add custom keyframes
-// theme.extend.keyframes:
-//   fadeSlideIn: {
-//     "0%":   { opacity: "0", transform: "translateY(8px)" },
-//     "100%": { opacity: "1", transform: "translateY(0)" },
-//   }
-// theme.extend.animation:
-//   "fadeSlideIn": "fadeSlideIn 0.3s ease-out forwards"
+// Add to src/index.css (Tailwind v4):
+// @keyframes fadeSlideIn {
+//   0%   { opacity: 0; transform: translateY(8px); }
+//   100% { opacity: 1; transform: translateY(0); }
+// }
 ```
 
 ```tsx
