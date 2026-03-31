@@ -12,7 +12,8 @@
       "Bash(ls -lh 01-eloquent-models-crud/solution_*.txt)",
       "Bash(ls -lh 11-caching-redis-tags/solution_*.txt)",
       "Bash(ls -lh 25-api-security-cors-sanitization/solution_*.txt)",
-      "Bash(ls -1d /home/nasar/www/laravel-full-tutorial/challenges/react/*/)"
+      "Bash(ls -1d /home/nasar/www/laravel-full-tutorial/challenges/react/*/)",
+      "Bash(__NEW_LINE_7f1b7704c0c39c53__ done:*)"
     ]
   }
 }
