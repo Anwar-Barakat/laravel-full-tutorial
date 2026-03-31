@@ -7,6 +7,7 @@ Prevent wasted re-renders and optimize bundle loading.
 | Memoization         | useMemo, React.memo, useCallback               |
 | Context Splitting   | Split by update frequency to prevent re-renders|
 | Bundle Optimization | React.lazy, Suspense, prefetch on hover        |
+| Virtualization      | Render large lists efficiently                 |
 
 ## Rules
 
@@ -229,3 +230,164 @@ export function AppRouter() {
 - `Suspense` boundary required above every lazy component — shows fallback during load
 - `prefetch()` — calling import() early starts the download; browser caches it automatically
 - onMouseEnter prefetch: user hovers → chunk downloads → by click it's already ready
+
+---
+
+## Problem 03 — Virtual List for 10K Items (Hard)
+
+### Scenario
+
+Build a virtualized list that efficiently renders 10,000 bookings by only mounting visible rows — the technique used by large tables and infinite scroll.
+
+### Requirements
+
+1. `useVirtualList` hook — calculates which items are visible based on scroll position
+2. Only render visible items + overscan buffer
+3. Fixed item height (simple version)
+4. `ResizeObserver` to track container height changes
+5. `transform: translateY` for positioning (GPU composited — no layout reflow)
+6. Total height spacer div — makes scrollbar proportional to full list
+
+### Expected Code
+
+```tsx
+// hooks/useVirtualList.ts
+interface UseVirtualListOptions {
+    itemCount:       number
+    itemHeight:      number   // fixed height per item
+    containerHeight: number
+    overscan?:       number   // extra items above/below viewport (default 3)
+}
+
+export function useVirtualList(
+    containerRef: React.RefObject<HTMLElement>,
+    options:      UseVirtualListOptions
+) {
+    const { itemCount, itemHeight, containerHeight, overscan = 3 } = options
+    const [scrollTop, setScrollTop] = useState(0)
+
+    useEffect(() => {
+        const el = containerRef.current
+        if (!el) return
+        const handleScroll = () => setScrollTop(el.scrollTop)
+        el.addEventListener("scroll", handleScroll, { passive: true })
+        return () => el.removeEventListener("scroll", handleScroll)
+    }, [containerRef])
+
+    const totalHeight = itemCount * itemHeight
+
+    const startIndex = Math.max(0, Math.floor(scrollTop / itemHeight) - overscan)
+    const endIndex   = Math.min(
+        itemCount - 1,
+        Math.ceil((scrollTop + containerHeight) / itemHeight) + overscan
+    )
+
+    const virtualItems = []
+    for (let i = startIndex; i <= endIndex; i++) {
+        virtualItems.push({ index: i, start: i * itemHeight, size: itemHeight })
+    }
+
+    return { virtualItems, totalHeight }
+}
+```
+
+```tsx
+// components/VirtualList.tsx
+export function VirtualList<T>({
+    items,
+    itemHeight,
+    overscan = 3,
+    renderItem,
+    style,
+}: VirtualListProps<T>) {
+    const containerRef = useRef<HTMLDivElement>(null)
+    const [containerHeight, setContainerHeight] = useState(600)
+
+    // Measure container height + re-measure on resize
+    useEffect(() => {
+        const el = containerRef.current
+        if (!el) return
+        const observer = new ResizeObserver(([entry]) => {
+            setContainerHeight(entry.contentRect.height)
+        })
+        observer.observe(el)
+        setContainerHeight(el.clientHeight)
+        return () => observer.disconnect()
+    }, [])
+
+    const { virtualItems, totalHeight } = useVirtualList(containerRef, {
+        itemCount: items.length,
+        itemHeight,
+        containerHeight,
+        overscan,
+    })
+
+    return (
+        <div ref={containerRef} style={{ overflow: "auto", ...style }}>
+            {/* Spacer — full height so scrollbar is proportional */}
+            <div style={{ height: totalHeight, position: "relative" }}>
+                {virtualItems.map(({ index, start, size }) => (
+                    <div
+                        key={index}
+                        style={{
+                            position:  "absolute",
+                            top:       0,
+                            left:      0,
+                            right:     0,
+                            height:    size,
+                            transform: `translateY(${start}px)`,
+                        }}
+                    >
+                        {renderItem(items[index], index)}
+                    </div>
+                ))}
+            </div>
+        </div>
+    )
+}
+
+// Usage — 10,000 bookings, only ~20 DOM nodes at a time
+function BookingVirtualList({ bookings }: { bookings: Booking[] }) {
+    return (
+        <VirtualList
+            items={bookings}
+            itemHeight={64}
+            overscan={5}
+            style={{ height: "600px" }}
+            renderItem={(booking) => (
+                <div className="flex items-center px-4 border-b" style={{ height: 64 }}>
+                    <span>{booking.school_name}</span>
+                    <span className="ml-auto text-sm text-gray-500">{booking.status}</span>
+                </div>
+            )}
+        />
+    )
+}
+```
+
+### Virtualization Algorithm
+
+```
+Without virtualization (10,000 items):
+  DOM nodes: 10,000 → browser lays out ALL of them → slow
+
+With virtualization (containerHeight=600, itemHeight=64):
+  Visible items: Math.ceil(600 / 64) = 10
+  With overscan=5: rendered items = 10 + 5 + 5 = 20
+  DOM nodes: ~20 at all times — regardless of total items
+
+Scroll to 1000px:
+  startIndex = Math.floor(1000 / 64) = 15
+  endIndex   = Math.ceil(1600 / 64)  = 25
+  With overscan: render indices 10 → 30
+  Items 0-9 unmounted, items 31+ not mounted yet
+```
+
+### What We're Evaluating
+
+- Only render visible items + overscan — DOM stays at ~20 nodes regardless of list size
+- `transform: translateY(Xpx)` over `top: Xpx` — GPU composited, no layout reflow
+- Total height spacer — scrollbar proportional to full list without rendering all items
+- `ResizeObserver` — re-measures container when layout changes (not just window resize)
+- `{ passive: true }` on scroll listener — browser scroll optimization hint
+- `overscan` — prevents blank rows during fast scrolling
