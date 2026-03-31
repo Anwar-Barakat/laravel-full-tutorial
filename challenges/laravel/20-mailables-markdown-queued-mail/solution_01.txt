@@ -9,14 +9,228 @@
 // app/Mail/BookingConfirmationMail.php
 // ============================================================
 
+namespace App\Mail;
+
+use App\Models\Booking;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Mail\Mailable;
+use Illuminate\Mail\Mailables\Address;
+use Illuminate\Mail\Mailables\Attachment;
+use Illuminate\Mail\Mailables\Content;
+use Illuminate\Mail\Mailables\Envelope;
+use Illuminate\Queue\SerializesModels;
+
+class BookingConfirmationMail extends Mailable implements ShouldQueue
+{
+    use Queueable, SerializesModels;
+
+    public function __construct(public Booking $booking) {}
+
+    public function envelope(): Envelope
+    {
+        return new Envelope(
+            subject:  'Booking Confirmed — ' . $this->booking->reference,
+            cc:       [new Address($this->booking->school->admin_email)],
+            tags:     ['booking-confirmation'],
+            metadata: ['booking_id' => $this->booking->id],
+        );
+    }
+
+    public function content(): Content
+    {
+        return new Content(
+            markdown: 'mail.booking.confirmed',
+        );
+    }
+
+    public function attachments(): array
+    {
+        return [
+            Attachment::fromPath(
+                storage_path('receipts/' . $this->booking->reference . '.pdf')
+            ),
+        ];
+    }
+}
 
 
 // ============================================================
 // resources/views/mail/booking/confirmed.blade.php  (Markdown)
 // ============================================================
 
+{{-- resources/views/mail/booking/confirmed.blade.php --}}
+
+<x-mail::message>
+
+# Booking Confirmed
+
+Dear {{ $booking->school->name }},
+
+Your booking has been confirmed. Here are the details:
+
+| Detail      | Value                                      |
+|-------------|--------------------------------------------|
+| Reference   | {{ $booking->reference }}                  |
+| Destination | {{ $booking->destination }}                |
+| Trip Date   | {{ $booking->trip_date->format('d M Y') }} |
+| Students    | {{ $booking->student_count }}              |
+| Amount      | AED {{ number_format($booking->amount, 2) }} |
+
+<x-mail::button :url="route('bookings.show', $booking->id)">
+View Booking
+</x-mail::button>
+
+If you have any questions, please contact us.
+
+Thanks,
+{{ config('app.name') }}
+
+</x-mail::message>
 
 
 // ============================================================
 // tests/Feature/BookingConfirmationMailTest.php  (Mail::fake)
 // ============================================================
+
+namespace Tests\Feature;
+
+use App\Mail\BookingConfirmationMail;
+use App\Models\Booking;
+use Illuminate\Support\Facades\Mail;
+use Tests\TestCase;
+
+class BookingConfirmationMailTest extends TestCase
+{
+    public function test_booking_confirmation_mail_is_queued(): void
+    {
+        Mail::fake();
+
+        $booking = Booking::factory()->create();
+
+        Mail::to($booking->school->email)->queue(new BookingConfirmationMail($booking));
+
+        Mail::assertQueued(BookingConfirmationMail::class, function ($mail) use ($booking) {
+            return $mail->booking->id === $booking->id;
+        });
+    }
+
+    public function test_booking_confirmation_mail_has_correct_subject(): void
+    {
+        Mail::fake();
+
+        $booking = Booking::factory()->create();
+
+        Mail::to($booking->school->email)->queue(new BookingConfirmationMail($booking));
+
+        Mail::assertQueued(BookingConfirmationMail::class, function ($mail) use ($booking) {
+            return str_contains($mail->envelope()->subject, $booking->reference);
+        });
+    }
+
+    public function test_no_mail_sent_without_queue(): void
+    {
+        Mail::fake();
+
+        Mail::assertNothingQueued();
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+SEND() VS QUEUE()
+------------------
+• Mail::to($email)->send()   → sends immediately, BLOCKS the response until done
+• Mail::to($email)->queue()  → pushes to queue, returns immediately (background)
+• always use queue() for emails in production — never block the user's request
+• with ShouldQueue: even send() automatically queues — both behave the same
+
+SHOULDQUEUE INTERFACE
+----------------------
+• implements ShouldQueue on a Mailable = "always queue this email"
+• even if the caller uses send(), Laravel routes it through the queue automatically
+• use Queueable + SerializesModels traits alongside ShouldQueue:
+  - Queueable     → adds queue/delay/connection configuration methods
+  - SerializesModels → safely serializes Eloquent models for the queue payload
+• without SerializesModels, passing a Model to the queue can cause issues
+  with large payloads or stale model data
+
+ENVELOPE() + CONTENT() — LARAVEL 11 STYLE
+-------------------------------------------
+• envelope() → controls the email "outer" metadata: subject, from, cc, bcc, tags
+• content()  → controls the email "inner" body: view/markdown template + data
+• attachments() → returns array of Attachment objects
+• this replaced the old build() method from Laravel 9 and earlier
+
+MARKDOWN TEMPLATES
+-------------------
+• x-mail::message   → outer wrapper, applies your brand layout automatically
+• x-mail::button    → styled CTA button: <x-mail::button :url="route(...)">
+• x-mail::panel     → highlighted panel block for important info
+• x-mail::table     → styled table (or use standard markdown | col | col |)
+• colon prefix on attributes = PHP expression: :url="route(...)" not :url="{{ }}"
+• publish templates: php artisan vendor:publish --tag=laravel-mail
+
+MAIL::FAKE() TESTING
+---------------------
+• Mail::fake() intercepts all mail — nothing is actually sent
+• must be called BEFORE the code that sends mail
+• Mail::assertQueued(ClassName::class, $callback) → assert queued with optional check
+• Mail::assertSent(ClassName::class)              → assert sent synchronously
+• Mail::assertNothingQueued()                     → assert no mail was queued
+• Mail::assertNothingSent()                       → assert no mail was sent
+
+TAGS & METADATA
+---------------
+• tags: ['booking-confirmation'] → group emails in your ESP (Mailgun, Postmark)
+  useful for filtering/analytics in your email provider dashboard
+• metadata: ['booking_id' => 1] → attach custom data to the email
+  can be used for webhooks — when email is opened/clicked, you get booking_id back
+
+NEW ADDRESS() — WHEN AND WHY
+-----------------------------
+• use new Address() inside envelope() for cc, bcc, replyTo recipients
+• accepts email only, or email + display name:
+    new Address('admin@school.com')               // email only
+    new Address('admin@school.com', 'Mr. Ahmed')  // email + name
+• cc/bcc always expect an ARRAY — even for one recipient:
+    cc: [new Address('admin@school.com')]          // ✅ array with one item
+    cc: new Address('admin@school.com')            // ❌ not an array
+• outside the Mailable, Mail::to() accepts plain string or User model directly:
+    Mail::to('parent@gmail.com')->queue(...)       // string ✅
+    Mail::to($user)->queue(...)                    // model ✅ (reads ->email)
+
+ATTACHMENTS — READ NOT STORE
+------------------------------
+• attachments() only READS the file from disk and attaches it — nothing is stored
+• you must generate/save the file BEFORE sending the email:
+    // Step 1: generate and save PDF
+    $pdf->save(storage_path('receipts/' . $booking->reference . '.pdf'));
+    // Step 2: send email — Laravel reads the file and attaches it
+    Mail::to($email)->queue(new BookingConfirmationMail($booking));
+• three ways to attach:
+    Attachment::fromPath(storage_path('file.pdf'))          // from disk path
+    Attachment::fromStorage('receipts/file.pdf')            // from Storage disk
+    Attachment::fromData(fn () => $content, 'file.pdf')     // from memory (no disk)
+      ->withMime('application/pdf')
+
+EMAIL BODY VS PDF ATTACHMENT
+------------------------------
+• the Markdown template (content()) = what appears in the EMAIL BODY (readable text)
+• attachments() = downloadable file — recipient sees a paperclip icon, clicks to download
+• they are completely separate — the PDF is never displayed inside the email body
+• standard pattern:
+    email body    → readable summary (booking details table, button)
+    PDF attachment → full detailed receipt for download
+
+ARTISAN
+-------
+• php artisan make:mail BookingConfirmationMail --markdown=mail.booking.confirmed
+  → creates the Mailable class AND the Markdown template in one command
+
+================================================================
+*/

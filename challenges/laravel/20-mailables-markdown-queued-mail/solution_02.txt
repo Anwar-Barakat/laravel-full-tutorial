@@ -9,32 +9,276 @@
 // database/migrations/xxxx_create_notification_preferences_table.php
 // ============================================================
 
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('notification_preferences', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+            $table->string('type');                   // e.g. 'booking_confirmation'
+            $table->boolean('enabled')->default(true);
+            $table->timestamps();
+
+            $table->unique(['user_id', 'type']); // one row per user per type
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('notification_preferences');
+    }
+};
 
 
 // ============================================================
 // app/Traits/HasNotificationPreferences.php
 // ============================================================
 
+namespace App\Traits;
+
+use App\Models\NotificationPreference;
+
+trait HasNotificationPreferences
+{
+    public function notificationPreferences()
+    {
+        return $this->hasMany(NotificationPreference::class);
+    }
+
+    // Check if user wants a specific email type — defaults to true if no row exists
+    public function wantsEmail(string $type): bool
+    {
+        return $this->notificationPreferences()
+            ->where('type', $type)
+            ->value('enabled') ?? true;
+    }
+
+    // Opt out of a specific email type
+    public function disableEmail(string $type): void
+    {
+        $this->notificationPreferences()->updateOrCreate(
+            ['type' => $type],
+            ['enabled' => false]
+        );
+    }
+
+    // Opt back in to a specific email type
+    public function enableEmail(string $type): void
+    {
+        $this->notificationPreferences()->updateOrCreate(
+            ['type' => $type],
+            ['enabled' => true]
+        );
+    }
+}
+
+
+// ============================================================
+// app/Models/NotificationPreference.php
+// ============================================================
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class NotificationPreference extends Model
+{
+    protected $fillable = ['user_id', 'type', 'enabled'];
+
+    protected $casts = ['enabled' => 'boolean'];
+}
 
 
 // ============================================================
 // app/Http/Controllers/UnsubscribeController.php
 // ============================================================
 
+namespace App\Http\Controllers;
+
+use App\Models\User;
+use Illuminate\Http\Request;
+
+class UnsubscribeController extends Controller
+{
+    public function __invoke(Request $request, User $user, string $type): void
+    {
+        // Reject tampered or expired URLs
+        abort_unless($request->hasValidSignature(), 403);
+
+        $user->disableEmail($type);
+    }
+}
 
 
 // ============================================================
 // app/Http/Controllers/NotificationPreferenceController.php
 // ============================================================
 
+namespace App\Http\Controllers;
+
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+
+class NotificationPreferenceController extends Controller
+{
+    public function update(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'type'    => ['required', 'string'],
+            'enabled' => ['required', 'boolean'],
+        ]);
+
+        $request->user()->notificationPreferences()->updateOrCreate(
+            ['type'    => $validated['type']],
+            ['enabled' => $validated['enabled']]
+        );
+
+        return response()->json(['message' => 'Preference updated.']);
+    }
+}
 
 
 // ============================================================
 // routes/web.php  (signed unsubscribe route)
 // ============================================================
 
+use App\Http\Controllers\UnsubscribeController;
+
+Route::get('/unsubscribe/{user}/{type}', UnsubscribeController::class)
+    ->name('unsubscribe');
 
 
 // ============================================================
 // routes/api.php  (preference management)
 // ============================================================
+
+use App\Http\Controllers\NotificationPreferenceController;
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::put('/notification-preferences', [NotificationPreferenceController::class, 'update']);
+});
+
+
+// ============================================================
+// Usage — generate signed unsubscribe URL (in Mailable or template)
+// ============================================================
+
+// In BookingConfirmationMail — pass the URL to the view
+public function content(): Content
+{
+    return new Content(
+        markdown: 'mail.booking.confirmed',
+        with: [
+            'unsubscribeUrl' => \URL::signedRoute('unsubscribe', [
+                'user' => $this->booking->school->user_id,
+                'type' => 'booking_confirmation',
+            ]),
+        ],
+    );
+}
+
+// In confirmed.blade.php footer
+// <a href="{{ $unsubscribeUrl }}">Unsubscribe from booking emails</a>
+
+// Check preference before sending (in your controller/service)
+// if ($user->wantsEmail('booking_confirmation')) {
+//     Mail::to($user)->queue(new BookingConfirmationMail($booking));
+// }
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+NOTIFICATION PREFERENCES PATTERN
+-----------------------------------
+• one row per user per notification type in notification_preferences table
+• unique(['user_id', 'type']) → enforces one setting per type per user
+• default to true (opted in) — if no row exists, user gets the email
+• updateOrCreate(['type' => $type], ['enabled' => false]) → safe upsert
+  creates the row if it doesn't exist, updates it if it does
+
+SIGNED ROUTES
+--------------
+• problem without signed routes:
+    https://app.com/unsubscribe/42/booking_confirmation
+    anyone can change 42 to 99 and unsubscribe someone else ❌
+
+• URL::signedRoute() adds a secret stamp (signature) to the URL:
+    https://app.com/unsubscribe/42/booking_confirmation?signature=XYZ
+    XYZ is calculated from: URL content + APP_KEY (only your server knows it)
+    if anyone changes 42 to 99 → signature no longer matches → 403 ❌
+
+• three lines you need:
+    // 1. generate signed link (in email footer)
+    URL::signedRoute('unsubscribe', ['user' => 42, 'type' => 'booking_confirmation']);
+    // 2. verify in controller
+    abort_unless($request->hasValidSignature(), 403);
+    // 3. do the action
+    $user->disableEmail($type);
+
+• \URL:: vs URL:: → same thing — backslash means skip the use statement at top
+    use Illuminate\Support\Facades\URL; URL::signedRoute(...)  // ✅ with use
+    \URL::signedRoute(...)                                      // ✅ without use
+
+• expiring signed routes: URL::temporarySignedRoute('name', now()->addDays(7), $params)
+  link expires after 7 days — good for password resets, email confirmations
+
+• analogy: like a bank cheque watermark — only genuine cheques have it,
+  bank rejects any cheque without a valid watermark
+
+SHOULDSEND() ON NOTIFICATIONS
+--------------------------------
+• for Laravel Notifications (not Mailables), use shouldSend() to skip sending:
+    public function shouldSend(object $notifiable, string $channel): bool
+    {
+        return $notifiable->wantsEmail($this->type);
+    }
+• Laravel calls shouldSend() automatically before sending each notification
+• return false = notification is silently skipped
+
+UPDATEORCREATE()
+-----------------
+• updateOrCreate($search, $values)
+  - finds a row matching $search conditions
+  - if found: updates it with $values
+  - if not found: creates a new row merging $search + $values
+• perfect for preference management — no need to check if row exists first
+
+->VALUE() VS ->PLUCK() VS ->ALL() VS ->GET()
+---------------------------------------------
+• ->value('col')  → ONE column from ONE row — returns a single scalar value
+    User::where('id', 1)->value('email');
+    // 'ahmed@gmail.com'
+
+• ->pluck('col')  → ONE column from MANY rows — returns Collection of values
+    User::get()->pluck('email');
+    // ['ahmed@gmail.com', 'sara@gmail.com', ...]
+    // with key: ->pluck('email', 'id') → [1 => 'ahmed@gmail.com', 2 => 'sara@gmail.com']
+
+• ->get()         → MANY rows, ALL columns — returns Collection of full models
+    User::get();
+    // Collection [User{id:1, name:'Ahmed', email:...}, User{id:2, ...}]
+
+• ->all()         → same as get() but returns plain PHP array instead of Collection
+    User::get()->all();
+    // [User{...}, User{...}]  ← plain array, not Collection
+
+• rule:
+    need one value from one row      → value()
+    need one column from many rows   → pluck()
+    need full models                 → get()
+    need full models as plain array  → get()->all()
+
+• ->value() read-only — only fetches data, never writes:
+    ->value('enabled')          // SELECT enabled ... LIMIT 1  (read)
+    ->update(['enabled' => false]) // UPDATE ...               (write)
+
+================================================================
+*/
