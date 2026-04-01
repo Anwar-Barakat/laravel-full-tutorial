@@ -9,20 +9,180 @@
 // app/Enums/BookingStatus.php
 // ============================================================
 
+namespace App\Enums;
+
+enum BookingStatus: string
+{
+    case PENDING   = 'pending';
+    case PAID      = 'paid';
+    case CANCELLED = 'cancelled';
+    case REFUNDED  = 'refunded';
+
+    public function label(): string
+    {
+        return match($this) {
+            self::PENDING   => 'Pending',
+            self::PAID      => 'Paid',
+            self::CANCELLED => 'Cancelled',
+            self::REFUNDED  => 'Refunded',
+        };
+    }
+
+    public function color(): string
+    {
+        return match($this) {
+            self::PENDING   => 'yellow',
+            self::PAID      => 'green',
+            self::CANCELLED => 'red',
+            self::REFUNDED  => 'blue',
+        };
+    }
+
+    public function canTransitionTo(self $next): bool
+    {
+        return match($this) {
+            self::PENDING => in_array($next, [self::PAID, self::CANCELLED]),
+            self::PAID    => $next === self::REFUNDED,
+            default       => false,
+        };
+    }
+}
 
 
 // ============================================================
 // app/Models/Scopes/SchoolScope.php
 // ============================================================
 
+namespace App\Models\Scopes;
+
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Scope;
+
+class SchoolScope implements Scope
+{
+    public function apply(Builder $builder, Model $model): void
+    {
+        if (auth()->check() && ! auth()->user()->is_admin) {
+            $builder->where('school_id', auth()->user()->school_id);
+        }
+    }
+}
 
 
 // ============================================================
 // app/Models/Booking.php  (casts + global scope + resolveRouteBinding)
 // ============================================================
 
+namespace App\Models;
+
+use App\Enums\BookingStatus;
+use App\Models\Scopes\SchoolScope;
+use Illuminate\Database\Eloquent\Model;
+
+class Booking extends Model
+{
+    protected $casts = [
+        'status' => BookingStatus::class,
+    ];
+
+    protected static function booted(): void
+    {
+        static::addGlobalScope(new SchoolScope());
+    }
+
+    public function resolveRouteBinding($value, $field = null): ?self
+    {
+        return $this->where('reference', $value)->firstOrFail();
+    }
+}
 
 
 // ============================================================
-// routes/api.php  (scoped binding)
+// routes/api.php  (scoped binding + admin bypass)
 // ============================================================
+
+use App\Http\Controllers\BookingController;
+use App\Models\Booking;
+use App\Models\Scopes\SchoolScope;
+
+// resolve booking by reference — calls resolveRouteBinding() automatically
+Route::get('/bookings/{booking}', [BookingController::class, 'show']);
+
+// scoped binding — 404 if booking doesn't belong to school
+Route::get('/schools/{school}/bookings/{booking}', [BookingController::class, 'show'])
+    ->scopeBindings();
+
+// admin — bypass global scope to see all bookings
+Route::get('/admin/bookings', function () {
+    return Booking::withoutGlobalScope(SchoolScope::class)->paginate();
+})->middleware('auth:sanctum');
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+PHP 8.1 BACKED ENUMS
+---------------------
+• enum Name: string { ... } → backed enum — each case has a string value stored in DB
+• case PAID = 'paid' → DB stores 'paid', PHP gives you BookingStatus::PAID object
+• enums can have methods — label(), color(), canTransitionTo() live inside the enum
+• use self:: inside the enum instead of ClassName:: (shorter, same thing)
+• canTransitionTo(self $next) → self as type hint means "another value of this enum"
+  enforces you pass BookingStatus::PAID, not a plain string 'paid'
+
+ENUM CASTING IN ELOQUENT
+--------------------------
+• protected $casts = ['status' => BookingStatus::class]
+• Laravel reads 'paid' from DB → gives you BookingStatus::PAID object automatically
+• Laravel writes BookingStatus::PAID → stores 'paid' in DB automatically
+• usage:
+    $booking->status->label()  // 'Paid'
+    $booking->status->color()  // 'green'
+    $booking->status = BookingStatus::PAID  // set it
+    $booking->status->value   // 'paid'  ← get the raw string back
+
+GLOBAL SCOPES
+--------------
+• a class that automatically adds a WHERE clause to every Eloquent query on a model
+• implement Scope interface with apply(Builder $builder, Model $model): void
+• attach in booted(): static::addGlobalScope(new SchoolScope())
+• booted() runs once when the model class is first loaded
+• all queries auto-filtered — no need to add ->where('school_id', ...) everywhere:
+    Booking::all()        → WHERE school_id = ?  (auto-applied)
+    Booking::find($id)    → WHERE school_id = ?  (auto-applied)
+    Booking::paginate()   → WHERE school_id = ?  (auto-applied)
+• bypass for admin: Booking::withoutGlobalScope(SchoolScope::class)->paginate()
+
+CUSTOM ROUTE MODEL BINDING
+----------------------------
+• default: /api/bookings/42 → resolves by id = 42
+• custom: override resolveRouteBinding() on the model to resolve by any column
+• /api/bookings/BK-202603-0001 → resolveRouteBinding('BK-202603-0001') → WHERE reference = ?
+• firstOrFail() → auto 404 if not found
+• the route parameter name doesn't matter — Laravel always calls resolveRouteBinding()
+
+SCOPED BINDING
+---------------
+• /schools/{school}/bookings/{booking} → does booking belong to school?
+• without ->scopeBindings(): Laravel resolves them independently — no ownership check
+• with ->scopeBindings(): Laravel adds WHERE school_id = ? automatically → 404 if mismatch
+• one method call: Route::get(...)->scopeBindings()
+• analogy: like checking both your ID and your ticket — both must match
+
+WITHOUTGLOBALSCOPE()
+---------------------
+• Booking::withoutGlobalScope(SchoolScope::class)->get() → removes one specific scope
+• Booking::withoutGlobalScopes()->get() → removes ALL global scopes
+• use for admin endpoints that need to see all records regardless of school
+
+ARTISAN
+-------
+• php artisan make:model Booking         → model stub
+• php artisan make:scope SchoolScope     → scope stub in app/Models/Scopes/
+• php artisan make:enum BookingStatus    → enum stub (Laravel 11+)
+
+================================================================
+*/
