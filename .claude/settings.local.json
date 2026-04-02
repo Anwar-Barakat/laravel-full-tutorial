@@ -16,7 +16,8 @@
       "Bash(__NEW_LINE_7f1b7704c0c39c53__ done:*)",
       "Bash(php --version)",
       "Bash(composer --version)",
-      "Bash(composer install:*)"
+      "Bash(composer install:*)",
+      "Bash(echo:*)"
     ]
   }
 }
