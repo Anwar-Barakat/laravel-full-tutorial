@@ -95,13 +95,13 @@ theme vs resolvedTheme
 • theme         = user's CHOICE: "light" | "dark" | "system"
 • resolvedTheme = ACTUAL value:  always "light" | "dark"
 • "system" resolves via window.matchMedia("(prefers-color-scheme: dark)")
-• Save theme to localStorage (not resolvedTheme) — preserves "system" choice
+• Save theme to localStorage — preserves "system" choice on reload
 
 localStorage IN useState INITIALISER
 --------------------------------------
 • Runs ONCE on mount — reads persisted value before first render
 • Avoids flash: page starts with correct theme immediately
-• Without: page always starts "system" then jumps on mount → visible flash
+• Without: page always starts "system" then jumps → visible flash
 
 WHY BOTH useState AND useEffect FOR OS THEME
 ----------------------------------------------
@@ -111,7 +111,7 @@ WHY BOTH useState AND useEffect FOR OS THEME
 
 document.documentElement.classList.toggle("dark", condition)
 -------------------------------------------------------------
-• Adds "dark" to <html> when condition is true, removes it when false
+• Adds "dark" to <html> when true, removes when false
 • Tailwind dark: variants activate when <html class="dark"> is present
 
 ================================================================

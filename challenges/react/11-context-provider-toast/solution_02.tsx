@@ -5,13 +5,6 @@
 import { createContext, useContext, useState, useCallback, useEffect } from "react";
 import React from "react";
 
-// ── useToast from solution_01 (import in real app) ────────────
-declare function useToast(): {
-    success: (message: string) => string;
-    info:    (message: string) => string;
-    error:   (message: string) => string;
-};
-
 // ============================================================
 // Types
 // ============================================================
@@ -52,13 +45,9 @@ const api = {
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [user,      setUser]      = useState<User | null>(null);
-    const [isLoading, setIsLoading] = useState(true); // true until session checked
+    const [isLoading, setIsLoading] = useState(true);
 
-    // useToast() works here because AuthProvider is placed BELOW ToastProvider
-    // Provider ordering rule: if B needs context from A, A must wrap B
-    const toast = useToast();
-
-    // Restore session on mount — check if stored token is still valid
+    // Restore session on mount
     useEffect(() => {
         const token = localStorage.getItem("auth_token");
         if (token) {
@@ -77,15 +66,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         );
         localStorage.setItem("auth_token", res.token);
         setUser(res.data);
-        toast.success(`Welcome back, ${res.data.name}!`);
-    }, [toast]);
+    }, []);
 
     const logout = useCallback(async () => {
         await api.post("/api/auth/logout", {});
         localStorage.removeItem("auth_token");
         setUser(null);
-        toast.info("You have been logged out.");
-    }, [toast]);
+    }, []);
 
     const hasPermission = useCallback(
         (permission: string) => user?.permissions.includes(permission) ?? false,
@@ -124,7 +111,7 @@ TIPS
 isLoading: true ON INIT
 -------------------------
 • Prevents flash of unauthenticated UI while session is being checked
-• Show a spinner while isLoading, then render the real UI
+• Show spinner while isLoading, then render real UI
 • Without it: page shows "Sign In" for a split second even when logged in
 
 SESSION RESTORE IN useEffect
@@ -132,13 +119,6 @@ SESSION RESTORE IN useEffect
 • Runs once on mount — validates token stored in localStorage
 • .catch() — removes expired/invalid token silently
 • .finally() — always sets isLoading: false so UI unblocks
-
-AuthProvider BELOW ToastProvider
-----------------------------------
-• AuthProvider calls useToast() — ToastProvider must wrap it
-• Rule: if B needs context from A, A must appear ABOVE B in the tree
-• login()  → toast.success — shows welcome message
-• logout() → toast.info   — shows logout confirmation
 
 hasPermission
 --------------
