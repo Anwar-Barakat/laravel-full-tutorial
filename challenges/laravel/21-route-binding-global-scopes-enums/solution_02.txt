@@ -9,20 +9,173 @@
 // app/Models/Booking.php  (SoftDeletes + Prunable + forceDeleteWithCascade)
 // ============================================================
 
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Prunable;
+use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+
+class Booking extends Model
+{
+    use SoftDeletes, Prunable;
+
+    // Define which records to auto-prune
+    // model:prune will delete these permanently
+    public function prunable(): Builder
+    {
+        return static::onlyTrashed()
+            ->where('deleted_at', '<=', now()->subDays(90));
+    }
+
+    // Hard delete with cascade cleanup inside a transaction
+    public function forceDeleteWithCascade(): void
+    {
+        DB::transaction(function () {
+            $this->payments()->forceDelete();
+            Cache::tags(['school:' . $this->school_id])->flush();
+            $this->forceDelete();
+        });
+    }
+}
 
 
 // ============================================================
 // app/Http/Controllers/BookingController.php  (trashed + restore endpoints)
 // ============================================================
 
+namespace App\Http\Controllers;
+
+use App\Models\Booking;
+use Illuminate\Http\JsonResponse;
+
+class BookingController extends Controller
+{
+    // GET /api/bookings/trashed — list soft-deleted bookings
+    public function trashed(): JsonResponse
+    {
+        return response()->json(
+            Booking::onlyTrashed()->paginate()
+        );
+    }
+
+    // POST /api/bookings/{booking}/restore
+    public function restore(int $id): JsonResponse
+    {
+        $booking = Booking::withTrashed()->findOrFail($id);
+
+        $booking->restore();
+
+        return response()->json(['message' => 'Booking restored.']);
+    }
+
+    // DELETE /api/bookings/{booking}/force — permanent delete with cascade
+    public function forceDestroy(int $id): JsonResponse
+    {
+        $booking = Booking::withTrashed()->findOrFail($id);
+
+        $booking->forceDeleteWithCascade();
+
+        return response()->json(['message' => 'Booking permanently deleted.']);
+    }
+}
 
 
 // ============================================================
 // routes/api.php  (trashed + restore routes)
 // ============================================================
 
+use App\Http\Controllers\BookingController;
+
+Route::middleware('auth:sanctum')->group(function () {
+    // list soft-deleted bookings
+    Route::get('/bookings/trashed', [BookingController::class, 'trashed']);
+
+    // restore a soft-deleted booking
+    Route::post('/bookings/{booking}/restore', [BookingController::class, 'restore']);
+
+    // permanent delete with cascade
+    Route::delete('/bookings/{booking}/force', [BookingController::class, 'forceDestroy']);
+});
 
 
 // ============================================================
 // routes/console.php  (schedule model:prune)
 // ============================================================
+
+use Illuminate\Support\Facades\Schedule;
+
+// runs daily at 03:00 — permanently deletes records matching prunable()
+Schedule::command('model:prune')->daily()->at('03:00');
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+SOFTDELETES TRAIT
+------------------
+• use SoftDeletes on a model — requires deleted_at column in the table
+• $booking->delete()          → sets deleted_at = now(), row stays in DB
+• $booking->restore()         → sets deleted_at = null
+• $booking->forceDelete()     → permanently removes the row from DB
+• Booking::all()              → automatically excludes soft-deleted rows
+• Booking::withTrashed()      → includes soft-deleted rows
+• Booking::onlyTrashed()      → only soft-deleted rows
+• migration: $table->softDeletes() → adds deleted_at nullable timestamp column
+
+PRUNABLE TRAIT
+---------------
+• use Prunable on a model to define which records get auto-deleted
+• define prunable(): Builder — return a query of records to permanently delete
+• php artisan model:prune → runs the query and force-deletes matching records
+• common pattern: prune soft-deleted records older than N days:
+    return static::onlyTrashed()->where('deleted_at', '<=', now()->subDays(90));
+• schedule daily so old trash is cleaned automatically — no manual cleanup needed
+• MassPrunable → deletes in bulk SQL (faster, no model events fired)
+• Prunable     → deletes one by one (slower, model events fired — use for cascade)
+
+HOW MODEL:PRUNE KNOWS WHICH MODELS TO PRUNE
+---------------------------------------------
+• model:prune scans all models in app/Models/ automatically
+• it only processes models that have the Prunable (or MassPrunable) trait
+• models without the trait are ignored — no prunable() method = skipped
+• if 10 models exist but only 2 use Prunable, only those 2 are pruned:
+    class Booking extends Model { use Prunable; }  // ✅ pruned
+    class Payment extends Model { use SoftDeletes; } // ❌ ignored
+    class School extends Model { }                   // ❌ ignored
+
+FORCEDELETE WITH CASCADE
+-------------------------
+• forceDelete() only deletes the booking row — related payments stay orphaned
+• always wrap cascade deletes in DB::transaction() — all or nothing
+• order matters: delete children first, then parent:
+    $this->payments()->forceDelete();   // 1. delete related payments
+    Cache::tags([...])->flush();        // 2. clear cache
+    $this->forceDelete();              // 3. delete the booking
+• soft-deleted related models also need forceDelete() — delete() won't work on them
+
+RESTORE ENDPOINT
+-----------------
+• withTrashed()->findOrFail($id) → find the record even if soft-deleted
+• without withTrashed(): findOrFail() treats soft-deleted rows as non-existent → 404
+• $booking->restore() → clears deleted_at, record is visible again in normal queries
+
+SCHEDULING MODEL:PRUNE
+------------------------
+• Schedule::command('model:prune')->daily()->at('03:00')
+• runs in routes/console.php (Laravel 11) or app/Console/Kernel.php (Laravel 10)
+• prunes ALL models that use the Prunable trait in one command
+• --model=Booking → prune only a specific model
+• run manually: php artisan model:prune
+
+ARTISAN
+-------
+• php artisan model:prune          → run pruning immediately
+• php artisan model:prune --pretend → show how many records would be pruned (dry run)
+
+================================================================
+*/
