@@ -1948,6 +1948,25 @@ Where to store what:
 
 ---
 
+## 50. We can write 80% of frontend code with AI — why should we still hire you?
+
+AI writes code. I decide what to build, catch what's wrong, and own the outcome.
+
+The 80% AI handles is the easy part. The other 20% is what ships good products:
+
+- **Judgment** — knowing when the AI output is wrong, inefficient, or insecure
+- **Architecture** — making decisions that hold up at scale, not just in a prompt
+- **Debugging** — tracing real bugs in runtime behavior AI can't observe
+- **Context** — understanding the codebase, the team, and why past decisions were made
+- **Communication** — translating between product, design, and engineering
+- **Accountability** — AI doesn't get paged at 2am when something breaks
+
+Also: AI makes me faster. The 80% it handles frees me to focus entirely on the work that actually matters.
+
+> The developers AI replaces are the ones who only wrote the easy 80% — and nothing else.
+
+---
+
 ## Quick Reference
 
 - **1** SSG/SSR/SPA/SSL — Rendering strategies + encryption
