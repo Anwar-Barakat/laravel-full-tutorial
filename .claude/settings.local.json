@@ -17,7 +17,8 @@
       "Bash(php --version)",
       "Bash(composer --version)",
       "Bash(composer install:*)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(/home/nasar/www/laravel-full-tutorial/challenges/react/14-router-guards-nested-layouts/solution_01.tsx:*)"
     ]
   }
 }
