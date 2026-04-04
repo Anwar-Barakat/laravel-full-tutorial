@@ -9,32 +9,218 @@
 // app/Data/BookingData.php  (DTO)
 // ============================================================
 
+namespace App\Data;
+
+use App\Models\Booking;
+
+class BookingData
+{
+    public function __construct(
+        public readonly int $studentCount,
+        public readonly int $destinationId,
+        public readonly int $schoolId,
+        public readonly string $tripDate,
+        public readonly float $amount = 0,
+        public readonly bool $sendNotifications = true,
+        public ?Booking $booking = null,  // set by CreateBookingAction, used by SendNotificationsAction
+    ) {}
+}
 
 
 // ============================================================
 // app/Actions/ValidateAvailabilityAction.php
 // ============================================================
 
+namespace App\Actions;
+
+use App\Data\BookingData;
+use App\Exceptions\InsufficientSpotsException;
+use App\Models\Destination;
+use Closure;
+
+class ValidateAvailabilityAction
+{
+    public function __invoke(BookingData $data, Closure $next): mixed
+    {
+        $destination = Destination::findOrFail($data->destinationId);
+
+        if ($destination->available_spots < $data->studentCount) {
+            throw new InsufficientSpotsException('Not enough spots.');
+        }
+
+        return $next($data);
+    }
+}
 
 
 // ============================================================
 // app/Actions/CalculatePricingAction.php
 // ============================================================
 
+namespace App\Actions;
+
+use App\Data\BookingData;
+use App\Models\Destination;
+use Closure;
+
+class CalculatePricingAction
+{
+    public function __invoke(BookingData $data, Closure $next): mixed
+    {
+        $destination = Destination::findOrFail($data->destinationId);
+
+        $data->amount = $data->studentCount * $destination->price_per_student;
+
+        return $next($data);
+    }
+}
 
 
 // ============================================================
 // app/Actions/CreateBookingAction.php
 // ============================================================
 
+namespace App\Actions;
+
+use App\Data\BookingData;
+use App\Models\Booking;
+use Closure;
+
+class CreateBookingAction
+{
+    public function __invoke(BookingData $data, Closure $next): mixed
+    {
+        $booking = Booking::create([
+            'school_id'      => $data->schoolId,
+            'destination_id' => $data->destinationId,
+            'student_count'  => $data->studentCount,
+            'amount'         => $data->amount,
+            'trip_date'      => $data->tripDate,
+            'status'         => 'pending',
+        ]);
+
+        // attach created booking to DTO so later actions can access it
+        $data->booking = $booking;
+
+        return $next($data);
+    }
+}
 
 
 // ============================================================
 // app/Actions/SendNotificationsAction.php
 // ============================================================
 
+namespace App\Actions;
+
+use App\Data\BookingData;
+use App\Mail\BookingConfirmationMail;
+use Closure;
+use Illuminate\Support\Facades\Mail;
+
+class SendNotificationsAction
+{
+    public function __invoke(BookingData $data, Closure $next): mixed
+    {
+        if($data->sendNotifications)
+            Mail::to($data->booking->school->admin_email)
+                ->queue(new BookingConfirmationMail($data->booking));
+
+        return $next($data);
+    }
+}
 
 
 // ============================================================
 // app/Http/Controllers/BookingController.php  (thin — delegates to pipeline)
 // ============================================================
+
+namespace App\Http\Controllers;
+
+use App\Actions\CalculatePricingAction;
+use App\Actions\CreateBookingAction;
+use App\Actions\SendNotificationsAction;
+use App\Actions\ValidateAvailabilityAction;
+use App\Data\BookingData;
+use App\Http\Requests\StoreBookingRequest;
+use App\Http\Resources\BookingResource;
+use Illuminate\Pipeline\Pipeline;
+
+class BookingController extends Controller
+{
+    public function store(StoreBookingRequest $request): BookingResource
+    {
+        $data = app(Pipeline::class)
+            ->send(new BookingData(...$request->validated()))
+            ->through([
+                ValidateAvailabilityAction::class,
+                CalculatePricingAction::class,
+                CreateBookingAction::class,
+                SendNotificationsAction::class,
+            ])
+            ->thenReturn();
+
+        return BookingResource::make($data->booking);
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+ACTION CLASSES
+---------------
+• single-purpose invokable class — does ONE thing, has ONE method: __invoke()
+• called like a function: app(CreateBookingAction::class)($data)
+• fat controller problem: one method doing validation + pricing + DB + email = hard to test
+• action class solution: each concern is its own class — easy to test in isolation
+• naming convention: verb + noun + Action → CreateBookingAction, SendNotificationsAction
+
+DTO (DATA TRANSFER OBJECT)
+---------------------------
+• a simple class that carries data between steps — no business logic
+• use public readonly to prevent accidental mutation
+• nullable properties (like $booking) allow later steps to attach data:
+    public ?Booking $booking = null  // null at start, set by CreateBookingAction
+• alternative to passing arrays — type-safe, IDE-friendly, self-documenting
+
+PIPELINE PATTERN
+-----------------
+• sends an object through a series of steps (pipes) in order
+• each pipe receives ($data, $next) — must call $next($data) to continue
+• if a pipe doesn't call $next, the pipeline stops there
+• syntax:
+    app(Pipeline::class)
+        ->send($data)          // the object to pass through
+        ->through([...])       // array of pipe class names
+        ->thenReturn();        // run and return the final result
+• Laravel resolves each pipe from the container — supports constructor injection
+
+EACH PIPE SIGNATURE
+--------------------
+• public function __invoke(BookingData $data, Closure $next): mixed
+• $data  → the object being passed through the pipeline
+• $next  → call this to pass $data to the next pipe
+• always return $next($data) — forgetting this stops the pipeline silently
+• pipeline order matters:
+    ValidateAvailability  → must run first (check before writing)
+    CalculatePricing      → needs destination data
+    CreateBooking         → writes to DB, attaches $booking to DTO
+    SendNotifications     → needs $data->booking set by previous step
+
+THIN CONTROLLER
+----------------
+• controller should only: validate input, call action/pipeline, return response
+• no business logic in the controller — delegate everything to actions
+• before: 50-line store() method with all logic mixed in
+• after: 10-line store() method that just runs the pipeline
+
+ARTISAN
+-------
+• php artisan make:class app/Actions/CreateBookingAction  → plain class stub
+• php artisan make:job CreateBookingJob                   → job stub (similar pattern)
+
+================================================================
+*/

@@ -9,32 +9,246 @@
 // app/Data/BookingData.php  (immutable DTO with with())
 // ============================================================
 
+namespace App\Data;
+
+use App\Models\Booking;
+
+class BookingData
+{
+    public function __construct(
+        public readonly int $studentCount,
+        public readonly int $destinationId,
+        public readonly int $schoolId,
+        public readonly string $tripDate,
+        public readonly float $amount = 0,
+        public readonly bool $sendNotifications = true,
+        public ?Booking $booking = null,  // set by CreateBookingAction, used by SendNotificationsAction
+    ) {}
+
+    // creates a new instance copying all values — only replaces what you pass
+    public function with(...$args): static
+    {
+        return new static(...array_merge([
+            'studentCount'      => $this->studentCount,
+            'destinationId'     => $this->destinationId,
+            'schoolId'          => $this->schoolId,
+            'tripDate'          => $this->tripDate,
+            'amount'            => $this->amount,
+            'sendNotifications' => $this->sendNotifications,
+            'booking'           => $this->booking,
+        ], $args));
+    }
+}
 
 
 // ============================================================
 // app/Pipelines/CreateBookingPipeline.php  (transaction-wrapped)
 // ============================================================
 
+namespace App\Pipelines;
+
+use App\Actions\CalculatePricingAction;
+use App\Actions\CreateBookingAction;
+use App\Actions\SendNotificationsAction;
+use App\Actions\ValidateAvailabilityAction;
+use App\Data\BookingData;
+use Illuminate\Pipeline\Pipeline;
+use Illuminate\Support\Facades\DB;
+
+class CreateBookingPipeline
+{
+    public function __construct(private Pipeline $pipeline) {}
+
+    public function run(BookingData $data): BookingData
+    {
+        return DB::transaction(fn () =>
+            $this->pipeline
+                ->send($data)
+                ->through([
+                    ValidateAvailabilityAction::class,
+                    CalculatePricingAction::class,
+                    CreateBookingAction::class,
+                    SendNotificationsAction::class,
+                ])
+                ->thenReturn()
+        );
+    }
+}
 
 
 // ============================================================
 // app/Pipelines/CancelBookingPipeline.php
 // ============================================================
 
+namespace App\Pipelines;
+
+use App\Actions\NotifyCancellationAction;
+use App\Actions\ProcessRefundAction;
+use App\Actions\UpdateStatusAction;
+use App\Actions\ValidateCancellationAction;
+use App\Data\BookingData;
+use Illuminate\Pipeline\Pipeline;
+use Illuminate\Support\Facades\DB;
+
+class CancelBookingPipeline
+{
+    public function __construct(private Pipeline $pipeline) {}
+
+    public function run(BookingData $data): BookingData
+    {
+        return DB::transaction(fn () =>
+            $this->pipeline
+                ->send($data)
+                ->through([
+                    ValidateCancellationAction::class,
+                    ProcessRefundAction::class,
+                    UpdateStatusAction::class,
+                    NotifyCancellationAction::class,
+                ])
+                ->thenReturn()
+        );
+    }
+}
 
 
 // ============================================================
 // app/Actions/ValidateCancellationAction.php
 // ============================================================
 
+namespace App\Actions;
+
+use App\Data\BookingData;
+use Closure;
+
+class ValidateCancellationAction
+{
+    public function __invoke(BookingData $data, Closure $next): mixed
+    {
+        if ($data->booking->status !== 'pending') {
+            throw new \RuntimeException('Only pending bookings can be cancelled.');
+        }
+
+        return $next($data);
+    }
+}
 
 
 // ============================================================
 // app/Actions/ProcessRefundAction.php
 // ============================================================
 
+namespace App\Actions;
+
+use App\Data\BookingData;
+use Closure;
+
+class ProcessRefundAction
+{
+    public function __invoke(BookingData $data, Closure $next): mixed
+    {
+        if ($data->booking->status === 'paid') {
+            $data->booking->payments()->update(['refunded' => true]);
+        }
+
+        return $next($data);
+    }
+}
 
 
 // ============================================================
 // tests/Unit/CalculatePricingActionTest.php  (pipe in isolation)
 // ============================================================
+
+namespace Tests\Unit;
+
+use App\Actions\CalculatePricingAction;
+use App\Data\BookingData;
+use Tests\TestCase;
+
+class CalculatePricingActionTest extends TestCase
+{
+    public function test_calculate_pricing_sets_correct_amount(): void
+    {
+        $data = new BookingData(
+            studentCount:  10,
+            destinationId: 1,
+            schoolId:      1,
+            tripDate:      '2026-06-01',
+        );
+
+        $action = new CalculatePricingAction();
+
+        // mock $next as identity function — just returns whatever it receives
+        $result = $action($data, fn ($d) => $d);
+
+        $this->assertEquals(5000, $result->amount);
+    }
+
+    public function test_validate_cancellation_throws_if_not_pending(): void
+    {
+        $booking         = new \stdClass();
+        $booking->status = 'paid';
+
+        $data          = new BookingData(studentCount: 10, destinationId: 1, schoolId: 1, tripDate: '2026-06-01');
+        $data->booking = $booking;
+
+        $this->expectException(\RuntimeException::class);
+
+        $action = new ValidateCancellationAction();
+        $action($data, fn ($d) => $d);
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+IMMUTABLE DTO WITH WITH()
+--------------------------
+• readonly properties can't be changed after construction — $data->amount = 5000 ❌
+• with() creates a NEW instance copying all values, replacing only what you pass:
+    $newData = $data->with(amount: 5000);  // original unchanged, new object has amount=5000
+• array_merge([$existing...], $args) → $args overrides matching keys
+• why immutable: prevents accidental mutation in earlier pipes affecting later pipes
+• $data->booking = null at start (not readonly) — set by CreateBookingAction later
+
+PIPELINE WITH DB::TRANSACTION()
+---------------------------------
+• wrap the entire pipeline in DB::transaction() to guarantee all-or-nothing:
+    DB::transaction(fn() => app(Pipeline::class)->send($data)->through([...])->thenReturn())
+• if any pipe throws → transaction rolls back → no partial data saved
+• keep transaction as short as possible — don't include slow operations like emails inside
+• SendNotificationsAction runs AFTER the transaction commits (queued mail)
+
+CONDITIONAL PIPE
+-----------------
+• always call $next($data) even when skipping — not calling $next stops the pipeline
+• check a flag on the DTO to decide whether to act:
+    if ($data->sendNotifications) { Mail::... }
+    return $next($data);  // always continue
+• use case: skip notifications in tests, background jobs, or admin-triggered actions
+
+UNIT TESTING A SINGLE PIPE
+----------------------------
+• no pipeline needed — just instantiate the action and call it directly
+• mock $next as an identity function: fn($d) => $d
+    $result = $action($data, fn($d) => $d);
+• this lets you test one pipe in complete isolation — no DB, no other pipes
+• asserting on $result verifies what the pipe produced
+
+PIPELINE CLASS PATTERN
+------------------------
+• wrap the pipeline in a dedicated class (CreateBookingPipeline, CancelBookingPipeline)
+• inject Pipeline via constructor — allows mocking in tests
+• run() method is the single entry point — controller calls $pipeline->run($data)
+• benefit: controller doesn't know which pipes exist — just calls run()
+
+ARTISAN
+-------
+• php artisan make:class app/Pipelines/CreateBookingPipeline  → plain class stub
+• php artisan make:test --unit CalculatePricingActionTest      → unit test stub
+
+================================================================
+*/
