@@ -9,38 +9,255 @@
 // database/migrations/xxxx_create_documents_table.php
 // ============================================================
 
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('documents', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('booking_id')->constrained()->cascadeOnDelete();
+            $table->string('path');
+            $table->string('disk');
+            $table->string('mime_type');
+            $table->unsignedBigInteger('size');
+            $table->string('original_name');
+            $table->timestamps();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('documents');
+    }
+};
 
 
 // ============================================================
 // app/Models/Document.php
 // ============================================================
 
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+class Document extends Model
+{
+    protected $fillable = [
+        'booking_id',
+        'path',
+        'disk',
+        'mime_type',
+        'size',
+        'original_name',
+    ];
+
+    public function booking(): BelongsTo
+    {
+        return $this->belongsTo(Booking::class);
+    }
+}
 
 
 // ============================================================
 // app/Observers/DocumentObserver.php  (delete file on model delete)
 // ============================================================
 
+namespace App\Observers;
+
+use App\Models\Document;
+use Illuminate\Support\Facades\Storage;
+
+class DocumentObserver
+{
+    public function deleted(Document $document): void
+    {
+        Storage::disk($document->disk)->delete($document->path);
+    }
+}
 
 
 // ============================================================
 // app/Http/Controllers/DocumentController.php
 // ============================================================
 
+namespace App\Http\Controllers;
+
+use App\Http\Requests\UploadDocumentRequest;
+use App\Models\Booking;
+use App\Models\Document;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+
+class DocumentController extends Controller
+{
+    public function upload(UploadDocumentRequest $request, Booking $booking): JsonResponse
+    {
+        $file = $request->file('document');
+        $ext  = $file->getClientOriginalExtension();
+        $path = $file->storeAs(
+            "bookings/{$booking->id}/documents",
+            Str::uuid() . '.' . $ext,
+            's3'
+        );
+
+        $document = Document::create([
+            'booking_id'    => $booking->id,
+            'path'          => $path,
+            'disk'          => 's3',
+            'mime_type'     => $file->getMimeType(),
+            'size'          => $file->getSize(),
+            'original_name' => $file->getClientOriginalName(),
+        ]);
+
+        return response()->json(['document' => $document], 201);
+    }
+
+    public function download(Booking $booking, Document $document): JsonResponse
+    {
+        $url = Storage::disk($document->disk)->temporaryUrl(
+            $document->path,
+            now()->addMinutes(30)
+        );
+
+        return response()->json(['url' => $url]);
+    }
+
+    public function destroy(Booking $booking, Document $document): JsonResponse
+    {
+        abort_if($document->booking_id !== $booking->id, 403);
+
+        $document->delete(); // triggers DocumentObserver::deleted()
+
+        return response()->json(['message' => 'Document deleted.']);
+    }
+}
 
 
 // ============================================================
 // app/Http/Requests/UploadDocumentRequest.php
 // ============================================================
 
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class UploadDocumentRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'document' => ['required', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:5120'],
+        ];
+    }
+}
 
 
 // ============================================================
 // routes/api.php
 // ============================================================
 
+use App\Http\Controllers\DocumentController;
+use Illuminate\Support\Facades\Route;
+
+Route::post('/bookings/{booking}/documents', [DocumentController::class, 'upload']);
+Route::get('/bookings/{booking}/documents/{document}/download', [DocumentController::class, 'download']);
+Route::delete('/bookings/{booking}/documents/{document}', [DocumentController::class, 'destroy']);
 
 
 // ============================================================
 // tests/Feature/DocumentUploadTest.php  (Storage::fake)
 // ============================================================
+
+namespace Tests\Feature;
+
+use App\Models\Booking;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
+use Tests\TestCase;
+
+class DocumentUploadTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_can_upload_document_to_s3(): void
+    {
+        Storage::fake('s3');
+
+        $booking = Booking::factory()->create();
+
+        $this->postJson("/api/bookings/{$booking->id}/documents", [
+            'document' => UploadedFile::fake()->create('passport.pdf', 2048, 'application/pdf'),
+        ])->assertCreated();
+
+        Storage::disk('s3')->assertExists("bookings/{$booking->id}/documents/");
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+STORAGE FACADE
+--------------
+• Storage::disk('s3')->put($path, $content) → upload raw content
+• $file->storeAs($directory, $filename, 'disk') → store UploadedFile with custom name
+• Storage::disk('s3')->delete($path) → delete file from disk
+• Storage::disk('s3')->temporaryUrl($path, $expiry) → signed URL for private files
+• Storage::disk('public')->url($path) → public URL (no expiry, local disk only)
+
+S3 PATH ORGANIZATION
+---------------------
+• use Str::uuid() for filenames to avoid collisions and name-guessing
+• organize by entity: bookings/{id}/documents/{uuid}.{ext}
+• store path AND disk in DB — disk lets you swap storage drivers without code changes
+
+TEMPORARY URLS
+--------------
+• temporaryUrl($path, now()->addMinutes(30)) → signed URL, expires in 30 minutes
+• only works with S3-compatible drivers — NOT the local disk driver
+• never expose the raw S3 path to clients — always generate a signed URL
+
+OBSERVER FILE CLEANUP
+---------------------
+• deleted(Document $document) → fires AFTER $document->delete() completes
+• deleting() → fires BEFORE delete — use only if you need to cancel/prevent deletion
+• uses $document->disk → works with any disk, not hard-coded to 's3'
+• register in AppServiceProvider::boot(): Document::observe(DocumentObserver::class)
+
+STORAGE::FAKE TESTING
+----------------------
+• Storage::fake('s3') → intercepts all S3 calls, stores files in memory — no real AWS
+• UploadedFile::fake()->create('file.pdf', 2048) → creates a fake 2MB file
+• UploadedFile::fake()->image('photo.jpg') → creates a fake image file
+• Storage::disk('s3')->assertExists($path) → assert file was stored
+• Storage::disk('s3')->assertMissing($path) → assert file was deleted
+
+UPLOADEDFILLE VS STORAGE
+------------------------
+• UploadedFile = the file the client sent RIGHT NOW — temporary, lives only during the request
+• Storage = your permanent warehouse (S3/local) — save, delete, retrieve, generate URLs
+• UploadedFile is always first (receive) → Storage is always second (persist/manage)
+• After upload request ends, UploadedFile is gone — use Storage + DB path for everything else
+
+ARTISAN
+-------
+• php artisan make:model Document -m → model + migration
+• php artisan make:observer DocumentObserver --model=Document → observer stub
+• php artisan make:request UploadDocumentRequest → form request class
+
+================================================================
+*/

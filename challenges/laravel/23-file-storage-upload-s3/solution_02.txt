@@ -6,17 +6,213 @@
 
 
 // ============================================================
+// database/migrations/xxxx_add_hash_to_documents_table.php
+// ============================================================
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::table('documents', function (Blueprint $table) {
+            $table->string('hash', 64)->nullable()->unique()->after('original_name');
+            $table->string('thumbnail_path')->nullable()->after('hash'); // set by job after processing
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::table('documents', function (Blueprint $table) {
+            $table->dropColumn('hash');
+        });
+    }
+};
+
+
+// ============================================================
 // app/Jobs/ProcessUploadedImageJob.php  (queued thumbnails)
 // ============================================================
 
+namespace App\Jobs;
+
+use App\Models\Document;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Storage;
+use Intervention\Image\Facades\Image;
+
+class ProcessUploadedImageJob implements ShouldQueue
+{
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    public function __construct(public readonly Document $document) {}
+
+    public function handle(): void
+    {
+        if (!str_starts_with($this->document->mime_type, 'image/')) {
+            return;
+        }
+
+        $contents  = Storage::disk('s3')->get($this->document->path);
+        $thumbnail = Image::make($contents)->fit(300, 300)->encode();
+
+        $thumbPath = 'thumbnails/' . basename($this->document->path);
+        Storage::disk('s3-thumbnails')->put($thumbPath, $thumbnail);
+
+        $this->document->update(['thumbnail_path' => $thumbPath]);
+    }
+}
 
 
 // ============================================================
 // app/Services/VirusScanService.php  (abstraction for ClamAV)
 // ============================================================
 
+namespace App\Services;
+
+use Illuminate\Http\UploadedFile;
+
+class VirusScanService
+{
+    public function scan(UploadedFile $file): bool
+    {
+        // ClamAV call would go here in production
+        // exec("clamdscan --no-summary {$file->getRealPath()}", $output, $exitCode);
+        return true;
+    }
+}
 
 
 // ============================================================
 // app/Http/Controllers/DocumentController.php  (deduplication + chunked + signed URL cache)
 // ============================================================
+
+namespace App\Http\Controllers;
+
+use App\Http\Requests\UploadDocumentRequest;
+use App\Jobs\ProcessUploadedImageJob;
+use App\Models\Booking;
+use App\Models\Document;
+use App\Services\VirusScanService;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+
+class DocumentController extends Controller
+{
+    public function __construct(private readonly VirusScanService $virusScan) {}
+
+    public function upload(UploadDocumentRequest $request, Booking $booking): JsonResponse
+    {
+        $file = $request->file('document');
+
+        if (!$this->virusScan->scan($file)) {
+            return response()->json(['message' => 'File failed virus scan.'], 422);
+        }
+
+        $hash     = hash('sha256', $file->get());
+        $existing = Document::where('hash', $hash)->first();
+
+        if ($existing) {
+            return response()->json(['document' => $existing], 200);
+        }
+
+        $ext  = $file->getClientOriginalExtension();
+        $path = $file->storeAs(
+            "bookings/{$booking->id}/documents",
+            Str::uuid() . '.' . $ext,
+            's3'
+        );
+
+        $document = Document::create([
+            'booking_id'    => $booking->id,
+            'path'          => $path,
+            'disk'          => 's3',
+            'mime_type'     => $file->getMimeType(),
+            'size'          => $file->getSize(),
+            'original_name' => $file->getClientOriginalName(),
+            'hash'          => $hash,
+        ]);
+
+        ProcessUploadedImageJob::dispatch($document)->onQueue('uploads');
+
+        return response()->json(['document' => $document], 201);
+    }
+
+    public function download(Booking $booking, Document $document): JsonResponse
+    {
+        $url = Cache::remember(
+            "doc:url:{$document->id}",
+            1500, // 25 min — must be less than 30 min URL expiry
+            fn() => Storage::disk($document->disk)
+                ->temporaryUrl($document->path, now()->addMinutes(30))
+        );
+
+        return response()->json(['url' => $url]);
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+QUEUED IMAGE PROCESSING
+-----------------------
+• ProcessUploadedImageJob::dispatch($document)->onQueue('uploads') → non-blocking
+• HTTP response returns immediately — thumbnail is generated in background by worker
+• implements ShouldQueue (not implement) → job goes to queue, not run synchronously
+• check mime_type before processing — skip non-image files (PDFs etc.)
+• php artisan queue:work --queue=uploads → process the uploads queue
+
+FILE DEDUPLICATION
+------------------
+• hash('sha256', $file->get()) → fingerprint the file BYTES, not the filename
+• Document::where('hash', $hash)->first() → check for existing identical file
+• unique index on hash column prevents duplicate rows at DB level
+• if hash exists → return existing record, skip S3 upload entirely
+
+MULTI-DISK STRATEGY
+-------------------
+• originals on 's3' (private, main bucket)
+• thumbnails on 's3-thumbnails' (separate bucket — different cost, can be public)
+• Storage::disk('s3-thumbnails')->put($path, $content) → write to second bucket
+• configure both disks in config/filesystems.php
+
+SIGNED URL CACHING
+------------------
+• Cache::remember("doc:url:{$id}", 1500, fn() => temporaryUrl(...addMinutes(30)))
+• 1500 seconds (25 min) MUST be less than URL expiry 1800 seconds (30 min)
+• if cache TTL >= URL expiry → users receive already-expired URLs from cache
+• avoids repeated S3 API calls on every download request
+
+VIRUS SCAN SERVICE
+------------------
+• VirusScanService is injected via constructor → mockable in tests
+• $this->mock(VirusScanService::class, fn($m) => $m->shouldReceive('scan')->andReturn(false))
+• scan() before storing anything — never save infected files to S3
+• install ClamAV on the server: sudo apt install clamav clamav-daemon
+• exec("clamdscan --no-summary {$file->getRealPath()}", $output, $exitCode)
+  → exec() runs a terminal command from PHP — same as typing it in the shell
+  → getRealPath() returns the temp file path on the server e.g. /tmp/phpXXXXXX
+  → exitCode: 0 = clean, 1 = virus found, 2 = error
+• return true in the stub does nothing but skip scanning — just a placeholder until ClamAV is installed
+
+IMAGE PROCESSING METHODS
+------------------------
+• get()         → download file bytes from S3 into memory
+• Image::make() → open those bytes for editing (Intervention Image library)
+• fit(300, 300) → resize + crop to exactly 300×300 pixels
+• encode()      → convert image object back to raw bytes (ready to save)
+• put()         → upload those bytes to S3
+
+================================================================
+*/

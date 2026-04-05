@@ -18,7 +18,9 @@
       "Bash(composer --version)",
       "Bash(composer install:*)",
       "Bash(echo:*)",
-      "Bash(/home/nasar/www/laravel-full-tutorial/challenges/react/14-router-guards-nested-layouts/solution_01.tsx:*)"
+      "Bash(/home/nasar/www/laravel-full-tutorial/challenges/react/14-router-guards-nested-layouts/solution_01.tsx:*)",
+      "Bash(cp /home/nasar/www/laravel-full-tutorial/solutions/laravel/23-file-storage-upload-s3/solution_01.php /tmp/sol01_content.php)",
+      "Bash(cp /home/nasar/www/laravel-full-tutorial/solutions/laravel/23-file-storage-upload-s3/solution_02.php /tmp/sol02_content.php)"
     ]
   }
 }
