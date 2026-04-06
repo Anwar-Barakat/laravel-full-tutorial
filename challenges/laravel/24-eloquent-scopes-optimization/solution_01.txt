@@ -9,14 +9,144 @@
 // app/Models/School.php  (subquery addSelect + constrained with)
 // ============================================================
 
+namespace App\Models;
 
+use App\Models\Booking;
+use Illuminate\Database\Eloquent\Model;
+
+class School extends Model
+{
+    protected $fillable = ['name', 'email', 'phone', 'address'];
+
+    public function bookings(){
+        return $this->hasMany(Booking::class);
+    }
+
+    public static function withDashboardStats(){
+        return static::select('id', 'name', 'email')
+            ->withCount('bookings')
+            ->withSum('bookings', 'amount')
+            ->addSelect([
+                'latest_booking_date' => Booking::select('trip_date')
+                    ->whereColumn('school_id', 'schools.id')
+                    ->latest()
+                    ->limit(1),
+            ]);
+    }
+}
 
 // ============================================================
 // app/Models/Booking.php  (select columns + loadMissing)
 // ============================================================
 
+namespace App\Models;
 
+use App\Enums\BookingStatus;
+use Illuminate\Database\Eloquent\Model;
+
+class Booking extends Model
+{
+    protected $fillable = [
+        'reference', 'school_id', 'trip_id', 'user_id',
+        'status', 'amount', 'student_count', 'trip_date',
+    ];
+
+    protected $casts = [
+        'status' => BookingStatus::class,
+        'trip_date' => 'date'
+    ];
+
+    public function school()
+    {
+        return $this->belongsTo(School::class);
+    }
+
+    public function trip()
+    {
+        return $this->belongsTo(Trip::class);
+    }
+
+    public function payments()
+    {
+        return $this->hasMany(Payment::class);
+    }
+}
 
 // ============================================================
 // app/Http/Controllers/SchoolController.php  (optimized index)
 // ============================================================
+
+namespace App\Http\Controllers;
+
+use App\Http\Resources\BookingResource;
+use App\Http\Resources\SchoolResource;
+use App\Models\School;
+use Illuminate\Http\Request;
+
+class SchoolController extends Controller {
+    public function index(){
+         $schools = School::withDashboardStats()->paginate(20);
+         return SchoolResource::collection($schools);
+    }
+
+    public function show(School $school){
+        $school->loadMissing(['bookings' => fn($q) => $q->select('id', 'school_id', 'amount', 'status', 'trip_date')]);
+        return SchoolResource::make($school);
+    }
+
+    public function bookings(School $school){
+        $bookings = $school->bookings()
+            ->select('id', 'school_id', 'trip_id', 'amount', 'status', 'trip_date')
+            ->with(['school:id,name', 'trip:id,name,destination'])
+            ->paginate(15);
+
+        $bookings->load('payments:id,booking_id,amount,method');
+        return BookingResource::collection($bookings);
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+N+1 IDENTIFICATION
+------------------
+• any loop accessing $model->relation without eager loading fires 1 query per row
+• DB::enableQueryLog() + DB::getQueryLog() → inspect queries in a debug route
+• Debugbar (barryvdh/laravel-debugbar) shows query count in the browser toolbar
+• Model::preventLazyLoading() in development throws if a relation is accessed lazily
+
+EAGER LOADING WITH COLUMN CONSTRAINTS
+--------------------------------------
+• with('school:id,name') → join only id and name columns from the schools table
+• MUST include the foreign key column (e.g. id) or the relation will not hydrate
+• with(['payments' => fn($q) => $q->where('status', 'completed')]) → constrained eager load
+
+WITHCOUNT AND WITHSUM
+----------------------
+• withCount('bookings')          → adds bookings_count attribute (1 subquery, not N)
+• withSum('bookings', 'amount')  → adds bookings_sum_amount attribute
+• withAvg, withMin, withMax also available
+• access via $school->bookings_count, $school->bookings_sum_amount
+
+ADDSELECT WITH SUBQUERY
+------------------------
+• addSelect(['col' => SubModel::select('col')->whereColumn(...)]) → computed column
+• executes as a correlated subquery — 1 additional subquery per row in the main query
+• use limit(1) + latest() to get the most recent value
+
+LOADMISSING VS LOAD
+--------------------
+• $model->load('school')        → always fires an eager load query
+• $model->loadMissing('school') → only fires if relation is not already loaded
+• use loadMissing in methods that may or may not have pre-loaded the relation
+
+ARTISAN
+-------
+• php artisan telescope:install → install Laravel Telescope for query profiling
+• php artisan make:model School → generate model stub
+
+================================================================
+*/

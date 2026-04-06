@@ -9,14 +9,197 @@
 // app/Models/Booking.php  (local scopes + toBase)
 // ============================================================
 
+namespace App\Models;
 
+use App\Enums\BookingStatus;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+
+class Booking extends Model
+{
+    protected $fillable = [
+        'reference', 'school_id', 'trip_id', 'user_id',
+        'status', 'amount', 'student_count', 'trip_date',
+    ];
+
+    protected $casts = [
+        'status'    => BookingStatus::class,
+        'trip_date' => 'date',
+    ];
+
+
+    public function scopePaid(Builder $query): Builder {
+        return $query->where('status', BookingStatus::PAID);
+    }
+
+    public function scopeUpcoming(Builder $query): Builder
+    {
+        return $query->where('trip_date', '>', now());
+    }
+
+    public function scopeBySchool(Builder $query, int $schoolId): Builder {
+        return $query->where('school_id', $schoolId);
+    }
+
+    public function scopeThisMonth(Builder $query): Builder{
+        return $query->whereMonth('trip_date', now()->month)
+            ->whereYear('trip_date', now()->year);
+    }
+
+    public function school()
+    {
+        return $this->belongsTo(School::class);
+    }
+}
 
 // ============================================================
 // app/Console/Commands/ExpireOldBookings.php  (chunkById + cursor)
 // ============================================================
 
+namespace App\Console\Commands;
 
+use App\Enums\BookingStatus;
+use App\Models\Booking;
+use Illuminate\Console\Command;
+use Illuminate\Support\Collection;
+
+class ExpireOldBookings extends Command {
+    protected $signature   = 'bookings:expire {--driver=chunk}';
+    protected $description = 'Expire pending bookings older than 30 days';
+
+    public function handle(): int
+    {
+        if($this->option('driver') == 'cursor')
+            $this->expireWithCursor();
+        else
+            $this->expireWithChunk();
+
+        $this->info('Done.');
+        return self::SUCCESS;
+    }
+
+    private function expireWithChunk(): void{
+        Booking::where('status', BookingStatus::PENDING)
+            ->where('created_at', '<', now()->subDays(30))
+            ->chunkById(200, function(Collection $bookings){
+                Booking::whereIn('id', $bookings->pluck('id'))
+                    ->update([
+                        'status' => BookingStatus::EXPIRED->value
+                    ]);
+
+                $this->info("Expired {$bookings->count()} bookings.");
+            });
+    }
+
+    private function expireWithCursor(): void{
+        foreach (Booking::where('status', BookingStatus::PENDING)->cursor() as $booking) {
+            if ($booking->created_at->lt(now()->subDays(30))) {
+                $booking->update(['status' => BookingStatus::EXPIRED->value]);
+            }
+        }
+    }
+}
 
 // ============================================================
 // app/Services/BookingReportService.php  (selectRaw + groupByRaw)
 // ============================================================
+
+namespace App\Services;
+
+use App\Enums\BookingStatus;
+use App\Models\Booking;
+use Illuminate\Support\Collection;
+
+class BookingReportService {
+    public function monthlyRevenue(): Collection {
+        return Booking::selectRaw(
+            'YEAR(trip_date) as year, MONTH(trip_date) as month, SUM(amount) as revenue, COUNT(*) as total'
+        )
+        ->where('status', BookingStatus::PAID)
+        ->groupByRaw('YEAR(trip_date), MONTH(trip_date)')
+        ->orderByRaw('YEAR(trip_date) DESC, MONTH(trip_date) DESC')
+        ->get();
+    }
+
+    public function readOnlyStats(): Collection
+    {
+        return Booking::select('id', 'amount', 'status', 'school_id')
+            ->toBase()
+            ->get();
+    }
+
+    public function debuggedQuery(): Collection
+    {
+        return Booking::query()
+            ->tap(fn($query) => \Log::debug('Booking report query', ['sql' => $query->toSql()]))
+            ->paid()
+            ->thisMonth()
+            ->get();
+    }
+
+    public function scopeChaining(): Collection
+    {
+        return Booking::paid()
+            ->upcoming()
+            ->bySchool(3)
+            ->thisMonth()
+            ->get();
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+CHUNKBYID VS CURSOR
+--------------------
+• chunkById(200, fn) → fetches 200 rows, processes, fetches next 200 (uses primary key offset)
+  - safe for UPDATE/DELETE — re-queries each batch so modified rows don't cause drift
+  - higher memory per batch, but safe for mutations
+• cursor() → single query, streams rows one at a time via PHP generator
+  - only one model in memory at a time — best for read-only processing
+  - NOT safe for bulk updates — updating while streaming can cause rows to be skipped
+  - use cursor for large exports, reports, or read-only pipelines
+
+LOCAL SCOPES
+------------
+• prefix method with scope: scopePaid() → call as ->paid() on the query
+• receive Builder $query as first argument — return the modified builder
+• chainable: Booking::paid()->upcoming()->bySchool(3)->get()
+• dynamic scope: scopeBySchool(Builder $q, int $id) → call as ->bySchool(3)
+
+LAZY COLLECTION WITH CURSOR
+----------------------------
+• LazyCollection — PHP generator that yields one item at a time
+• Booking::cursor() returns a LazyCollection automatically
+• chain filter(), map(), chunk() on LazyCollection without loading all into memory
+
+SELECTRAW AND GROUPBYRAW
+-------------------------
+• selectRaw('SUM(amount) as revenue') → raw SQL expression as a column
+• groupByRaw('YEAR(trip_date), MONTH(trip_date)') → group by raw expression
+• orderByRaw('YEAR(trip_date) DESC') → order by raw expression
+• never quote column names inside raw expressions: SUM(amount) not SUM('amount')
+
+TOBASE
+------
+• Booking::toBase()->get() → returns Collection<stdClass> instead of Collection<Booking>
+• skips Eloquent model instantiation — faster for read-only aggregations
+• access as object properties: $row->amount, $row->status
+• cannot call model methods — use only for pure data access
+
+TAP
+---
+• ->tap(fn($q) => Log::debug($q->toSql())) → inspect query before execution
+• does not modify the query — purely for debugging/logging side effects
+
+ARTISAN
+-------
+• php artisan make:command ExpireOldBookings → generate console command stub
+• php artisan bookings:expire             → run with chunk strategy (default)
+• php artisan bookings:expire --driver=cursor → run with cursor strategy
+
+================================================================
+*/
