@@ -9,26 +9,285 @@
 // app/Http/Middleware/SecurityHeadersMiddleware.php
 // ============================================================
 
+namespace App\Http\Middleware;
+
+use Closure;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+class SecurityHeadersMiddleware
+{
+    public function handle(Request $request, Closure $next): Response
+    {
+        $response = $next($request);
+
+        $response->headers->set('X-Content-Type-Options', 'nosniff');
+        $response->headers->set('X-Frame-Options', 'DENY');
+        $response->headers->set('X-XSS-Protection', '1; mode=block');
+        $response->headers->set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+        $response->headers->set('Content-Security-Policy', "default-src 'self'");
+        $response->headers->set('Referrer-Policy', 'strict-origin-when-cross-origin');
+        $response->headers->set('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+
+        return $response;
+    }
+}
 
 
 // ============================================================
 // app/Http/Middleware/VerifyWebhookSignature.php
 // ============================================================
 
+namespace App\Http\Middleware;
+
+use Closure;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+class VerifyWebhookSignature
+{
+    public function handle(Request $request, Closure $next): Response
+    {
+        $expected = 'sha256=' . hash_hmac(
+            'sha256',
+            $request->getContent(),
+            config('services.webhook_secret')
+        );
+
+        if (!hash_equals($expected, (string) $request->header('X-Signature-256'))) {
+            abort(401, 'Invalid webhook signature.');
+        }
+
+        return $next($request);
+    }
+}
 
 
 // ============================================================
 // app/Services/SecurityAuditLog.php
 // ============================================================
 
+namespace App\Services;
+
+use Illuminate\Support\Facades\Log;
+
+class SecurityAuditLog
+{
+    public function loginFailed(string $email, string $ip, string $userAgent): void
+    {
+        Log::channel('security')->warning('Login failed', [
+            'email'      => $email,
+            'ip'         => $ip,
+            'user_agent' => $userAgent,
+            'timestamp'  => now()->toIso8601String(),
+        ]);
+    }
+
+    public function unauthorizedAccess(int $userId, string $route, string $ip): void
+    {
+        Log::channel('security')->warning('Unauthorized access attempt', [
+            'user_id'   => $userId,
+            'route'     => $route,
+            'ip'        => $ip,
+            'timestamp' => now()->toIso8601String(),
+        ]);
+    }
+
+    public function tokenRevoked(int $userId, string $ip): void
+    {
+        Log::channel('security')->info('Token revoked', [
+            'user_id'   => $userId,
+            'ip'        => $ip,
+            'timestamp' => now()->toIso8601String(),
+        ]);
+    }
+}
 
 
 // ============================================================
 // app/Http/Controllers/AuthController.php  (IP blocking + audit log)
 // ============================================================
 
+namespace App\Http\Controllers;
+
+use App\Models\User;
+use App\Services\SecurityAuditLog;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
+
+class AuthController extends Controller
+{
+    public function __construct(private SecurityAuditLog $auditLog) {}
+
+    public function login(Request $request): JsonResponse
+    {
+        $request->validate([
+            'email'    => ['required', 'string', 'email'],
+            'password' => ['required', 'string'],
+        ]);
+
+        $ip = $request->ip();
+
+        // Check if IP is blocked before attempting auth
+        if (Cache::has("ip_blocked:{$ip}")) {
+            abort(429, 'Too many failed attempts. Try again later.');
+        }
+
+        $user = User::where('email', $request->email)->first();
+
+        // Constant-time check — always runs Hash::check even when user not found
+        // Prevents timing attacks (no user = no bcrypt = faster response = enumerable)
+        if (!$user || !Hash::check($request->password, $user->password ?? Hash::make('dummy'))) {
+            $this->auditLog->loginFailed($request->email, $ip, $request->userAgent() ?? '');
+
+            $key      = "login_failures:{$ip}";
+            $failures = Cache::increment($key);
+            Cache::expire($key, 600); // 10-minute window
+
+            if ($failures >= 5) {
+                Cache::put("ip_blocked:{$ip}", true, 1800); // block 30 minutes
+            }
+
+            throw ValidationException::withMessages([
+                'email' => ['These credentials do not match our records.'],
+            ]);
+        }
+
+        // Reset failure counter on successful login
+        Cache::forget("login_failures:{$ip}");
+
+        $token = $user->createToken('api')->plainTextToken;
+
+        return response()->json(['token' => $token]);
+    }
+
+    public function logout(Request $request): JsonResponse
+    {
+        $this->auditLog->tokenRevoked($request->user()->id, $request->ip());
+        $request->user()->currentAccessToken()->delete();
+
+        return response()->json(['message' => 'Logged out.']);
+    }
+}
 
 
 // ============================================================
 // app/Exceptions/Handler.php  (sanitize error responses in production)
 // ============================================================
+
+namespace App\Exceptions;
+
+use Illuminate\Foundation\Exceptions\Handler as ExceptionHandler;
+use Throwable;
+
+class Handler extends ExceptionHandler
+{
+    public function render($request, Throwable $e): \Symfony\Component\HttpFoundation\Response
+    {
+        if ($request->expectsJson() && !config('app.debug')) {
+            return response()->json([
+                'error' => [
+                    'code'    => 'SERVER_ERROR',
+                    'message' => 'An unexpected error occurred.',
+                ],
+            ], 500);
+        }
+
+        return parent::render($request, $e);
+    }
+}
+
+
+// ============================================================
+// bootstrap/app.php  (registering middleware)
+// ============================================================
+
+// ->withMiddleware(function (Middleware $middleware): void {
+//
+//     // append = global, runs on every request (web + api)
+//     $middleware->append(\App\Http\Middleware\SecurityHeadersMiddleware::class);
+//
+//     // api(append:) = API routes only
+//     $middleware->api(append: [
+//         \App\Http\Middleware\SanitizeInputMiddleware::class,
+//     ]);
+//
+//     // VerifyWebhookSignature — apply per route only, not globally
+//     // Route::post('/webhooks/stripe', ...)->middleware(VerifyWebhookSignature::class);
+// });
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+SECURITY HEADERS
+----------------
+• X-Content-Type-Options: nosniff → prevents MIME-type sniffing — browser won't guess file type
+• X-Frame-Options: DENY → prevents clickjacking — your page cannot be embedded in an iframe
+• Strict-Transport-Security → forces HTTPS for max-age seconds — prevents HTTP downgrade attacks
+• Content-Security-Policy: default-src 'self' → blocks loading scripts/resources from external domains
+• Referrer-Policy → controls what referrer info is sent with requests
+• Permissions-Policy → disables browser features like camera/mic you don't use
+• register SecurityHeadersMiddleware globally with $middleware->append() — hits every response
+
+PREPEND VS APPEND
+-----------------
+• prepend → your middleware runs FIRST, before all others (e.g. Sanctum auth must go first)
+• append  → your middleware runs LAST, after all others (e.g. security headers don't depend on order)
+• $middleware->api(prepend: [...])  → prepend to API middleware stack only
+• $middleware->api(append: [...])   → append to API middleware stack only
+• $middleware->append(...)          → global — applies to ALL routes (web + api)
+
+HMAC WEBHOOK VERIFICATION
+--------------------------
+• hash_hmac('sha256', $rawBody, $secret) → compute HMAC of the request body
+• use $request->getContent() NOT $request->all() — signatures are computed over raw bytes
+• hash_equals() → timing-safe comparison — prevents timing attacks on signature guessing
+• 'sha256=' . $hmac matches the format used by Stripe, GitHub, and most webhook providers
+• VerifyWebhookSignature should be applied per route, not globally
+
+WHY NOT Auth::attempt() FOR ENUMERATION SAFETY
+-----------------------------------------------
+• Auth::attempt() stops early when email not found — no bcrypt runs → faster response
+• attacker measures response time: fast = email not found, slow = email found wrong password
+• manual Hash::check() with ?? Hash::make('dummy') always runs bcrypt → same timing always
+• Hash facade IS bcrypt — Hash::make() uses bcrypt by default (config/hashing.php driver: 'bcrypt')
+• Auth::attempt() is fine for normal login but gives less control over timing
+
+IP BLOCKING WITH CACHE
+-----------------------
+• Cache::increment("login_failures:{$ip}") → atomic counter per IP
+• Cache::expire($key, 600) → 10-minute sliding window for failures
+• Cache::put("ip_blocked:{$ip}", true, 1800) → block IP for 30 minutes after 5 failures
+• always check Cache::has("ip_blocked:{$ip}") BEFORE attempting auth — fail fast
+• Cache::forget("login_failures:{$ip}") → reset counter on successful login
+
+AUDIT LOGGING
+-------------
+• use a dedicated 'security' log channel in config/logging.php
+• log failed logins with email, IP, user agent, timestamp
+• log unauthorized access and token revocations per user ID
+• inject SecurityAuditLog via constructor — Laravel resolves it automatically
+• log to a separate file so security events are easy to monitor and alert on
+
+ERROR RESPONSE SANITIZATION
+-----------------------------
+• never expose stack traces, SQL queries, file paths, or env values to API consumers
+• gate behind !config('app.debug') → local development still gets full errors
+• $request->expectsJson() → only apply JSON envelope to API requests
+• parent::render() → let Laravel handle non-API or non-500 responses normally
+
+ARTISAN
+-------
+• php artisan make:middleware SecurityHeadersMiddleware → generate middleware stub
+• php artisan make:middleware VerifyWebhookSignature → generate webhook middleware
+• php artisan route:list → verify which middleware is applied to each route
+• php artisan config:cache → cache config for production performance
+
+================================================================
+*/

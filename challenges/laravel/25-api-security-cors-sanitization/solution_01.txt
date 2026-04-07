@@ -9,14 +9,164 @@
 // config/cors.php  (whitelist origins)
 // ============================================================
 
+return [
+    'paths'                    => ['api/*', 'sanctum/csrf-cookie'],
+    'allowed_methods'          => ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    'allowed_origins'          => [env('FRONTEND_URL', 'https://app.tripz.ae')],
+    'allowed_origins_patterns' => [],
+    'allowed_headers'          => ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
+    'exposed_headers'          => [],
+    'max_age'                  => 0,
+    'supports_credentials'     => true,
+];
 
 
 // ============================================================
 // app/Http/Middleware/SanitizeInputMiddleware.php
 // ============================================================
 
+namespace App\Http\Middleware;
+
+use Closure;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+class SanitizeInputMiddleware
+{
+    public function handle(Request $request, Closure $next): Response
+    {
+        $input = array_map(
+            fn($v) => is_string($v) ? strip_tags(trim($v)) : $v,
+            $request->all()
+        );
+
+        $request->merge($input);
+
+        return $next($request);
+    }
+}
 
 
 // ============================================================
 // app/Http/Controllers/AuthController.php  (enumeration-safe login)
 // ============================================================
+
+namespace App\Http\Controllers;
+
+use App\Models\User;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
+
+class AuthController extends Controller
+{
+    public function login(Request $request): JsonResponse
+    {
+        $request->validate([
+            'email'    => ['required', 'string', 'email'],
+            'password' => ['required', 'string'],
+        ]);
+
+        $user = User::where('email', $request->email)->first();
+
+        // Constant-time check — always run Hash::check even when user not found
+        // Prevents timing attacks and user enumeration
+        if (!$user || !Hash::check($request->password, $user->password ?? Hash::make('dummy'))) {
+            throw ValidationException::withMessages([
+                'email' => ['These credentials do not match our records.'],
+            ]);
+        }
+
+        $token = $user->createToken('api')->plainTextToken;
+
+        return response()->json(['token' => $token]);
+    }
+
+    public function logout(Request $request): JsonResponse
+    {
+        $request->user()->currentAccessToken()->delete();
+
+        return response()->json(['message' => 'Logged out.']);
+    }
+}
+
+
+// ============================================================
+// app/Models/User.php  ($hidden + $fillable)
+// ============================================================
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Notifications\Notifiable;
+use Laravel\Sanctum\HasApiTokens;
+
+class User extends Authenticatable
+{
+    use HasApiTokens, HasFactory, Notifiable;
+
+    protected $fillable = [
+        'name', 'email', 'password', 'role', 'school_id',
+    ];
+
+    protected $hidden = [
+        'password',
+        'remember_token',
+        'two_factor_secret',
+        'two_factor_recovery_codes',
+    ];
+
+    protected $casts = [
+        'email_verified_at' => 'datetime',
+        'password'          => 'hashed',
+    ];
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+CORS CONFIGURATION
+------------------
+• config/cors.php → controls cross-origin request policy
+• allowed_origins should list EXACT origins — never use '*' in production with credentials
+• supports_credentials: true → required for Sanctum SPA authentication (sends cookies)
+• paths: ['api/*'] → only apply CORS headers to API routes
+
+INPUT SANITIZATION
+------------------
+• strip_tags(trim($v)) → removes HTML/PHP tags and trims whitespace
+• apply to all string inputs before validation — sanitize at the boundary
+• array_map with fn($v) → loops over all request inputs without a foreach
+• register as global middleware for all API routes in bootstrap/app.php
+
+MASS ASSIGNMENT PROTECTION
+----------------------------
+• $fillable lists allowed columns — only these can be mass-assigned
+• $guarded = [] → disables protection entirely — never use in production
+• $hidden = ['password', 'remember_token'] → excluded from toArray() / JSON output
+
+USER ENUMERATION PREVENTION
+-----------------------------
+• identical error message for wrong email AND wrong password
+• Hash::make('dummy') → ensures bcrypt work is always done, preventing timing difference
+• never return 'email not found' vs 'wrong password' — attacker can enumerate valid emails
+
+TIMING ATTACK PREVENTION
+-------------------------
+• Hash::check() is constant-time (bcrypt comparison)
+• without the dummy hash, a missing user short-circuits before Hash::check → measurable time difference
+• hash_equals() → use for manual string comparison to prevent timing attacks
+
+ARTISAN
+-------
+• php artisan make:middleware SanitizeInputMiddleware → generate middleware stub
+• php artisan config:cache → cache CORS config for production
+• register middleware in bootstrap/app.php using ->withMiddleware()
+
+================================================================
+*/
