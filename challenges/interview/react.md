@@ -1967,6 +1967,28 @@ Also: AI makes me faster. The 80% it handles frees me to focus entirely on the w
 
 ---
 
+## 51. But AI writes most of the code now — why do companies still need developers?
+
+Yes — AI can handle roughly 80% of the code. My job is the 20% that determines whether the product succeeds or fails.
+
+But more importantly: **AI doesn't replace developers. It multiplies them.**
+
+If you understand system design, write clean code, and know why decisions matter — AI makes you 10× more productive. 
+You move faster, cover more ground, and the output is still high quality because *you* are setting the direction.
+
+If you don't care about any of that — just shipping something that runs — AI makes that 10× worse, faster. 
+You produce more broken, unmaintainable code at higher speed. The AI amplifies whatever the developer brings to the table.
+
+**Historical pattern: tools never killed the profession, they raised the bar**
+
+- When **WordPress** launched "no coding needed", people said web development was dead. Instead, the job market filled with WordPress developers doing customization, performance tuning, and plugin development — things the tool couldn't do alone.
+- When **high-level languages** replaced assembly, no one stopped needing programmers. The abstractions removed repetitive work and freed engineers to solve harder problems. Assembly developers didn't disappear — their work just moved up the stack.
+- AI is the same shift. It removes the mechanical 80%. What remains is judgment, architecture, debugging real systems, and accountability — the parts that were always the actual engineering.
+
+The developers who will struggle are the ones who only did the easy 80% and nothing else.
+
+---
+
 ## Quick Reference
 
 - **1** SSG/SSR/SPA/SSL — Rendering strategies + encryption
@@ -2017,4 +2039,7 @@ Also: AI makes me faster. The 80% it handles frees me to focus entirely on the w
 - **46** XSS — Script injection — React escapes by default
 - **47** Cookies vs localStorage — Auto-sent to server vs client-only
 - **48** Secure Tokens — HttpOnly cookies, short expiry, refresh tokens
+- **49** localStorage risks — Don't store auth tokens, use HttpOnly cookies
+- **50** Why hire you (short) — AI does 80%, the 20% judgment/architecture/accountability is the hard part
+- **51** Why hire you (full) — AI multiplies you; WordPress/assembly show tools raise the bar, not end the profession
 - **49** Why Not localStorage — XSS vulnerable, no HttpOnly, no expiry
