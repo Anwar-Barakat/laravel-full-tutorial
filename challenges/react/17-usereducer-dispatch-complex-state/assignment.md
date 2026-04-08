@@ -351,216 +351,241 @@ Each step receives `{ data, errors, setField }` and renders labelled inputs with
 
 ---
 
-## Problem 02 — Async Wizard with Dynamic Steps (Hard)
+## Problem 02 — Multi-Step Form with React Hook Form + Zod (Hard)
 
-Extend the wizard with dynamic step list, conditional "passport" step, per-step loading, and undo.
+Replace manual validation from Problem 01 with **React Hook Form + Zod**. Each step has its own Zod schema, the full type is inferred with `z.infer<>`, and per-step validation uses `trigger()`.
 
 ---
 
-### Part A — Extended types
+### Part A — Zod Schemas
 
-**File:** `types/wizard.ts` (additions)
+**File:** `utils/bookingSchemas.ts`
 
 ```ts
-// Extended step list (passport is conditional)
-type WizardStep = "school" | "destination" | "passport" | "details" | "review" | "confirm"
+import { z } from "zod"
 
-// Passport data
-interface WizardFormData {
-  // …previous fields…
-  // Step: passport (only for international)
-  passportNumber: string
-  passportExpiry: string
-  passportCountry: string
-}
+// Per-step schemas
+const schoolSchema = z.object({
+  schoolName:   z.string().min(1, "School name is required"),
+  contactName:  z.string().min(1, "Contact name is required"),
+  contactEmail: z.string().email("Valid email required"),
+})
 
-// Extended state
-interface WizardState {
-  // …previous fields…
-  activeSteps: WizardStep[]           // dynamic — computed from selections
-  stepLoading: boolean                // true while fetching step data
-  stepData: Record<string, unknown>   // data fetched for current step (e.g. destinations list)
-  history: WizardState[]              // stack for UNDO_LAST
-}
+const destinationSchema = z.object({
+  destinationId:   z.number({ required_error: "Select a destination" }),
+  destinationName: z.string().min(1, "Destination name is required"),
+  destinationType: z.enum(["domestic", "international"], {
+    required_error: "Select a destination type",
+  }),
+})
 
-// Extended actions
-type WizardAction =
-  | /* …previous actions… */
-  | { type: "SKIP_STEP" }
-  | { type: "SET_STEP_LOADING"; loading: boolean }
-  | { type: "SET_STEP_DATA"; data: Record<string, unknown> }
-  | { type: "SET_ACTIVE_STEPS"; steps: WizardStep[] }
-  | { type: "UNDO_LAST" }
+const detailsSchema = z.object({
+  tripDate: z.string()
+    .min(1, "Trip date is required")
+    .refine(d => new Date(d) > new Date(), "Date must be in the future"),
+  studentCount: z.number().min(1, "At least 1 student required"),
+  notes: z.string().optional(),
+})
+
+// Merged full schema
+const bookingSchema = schoolSchema.merge(destinationSchema).merge(detailsSchema)
+
+// TypeScript type inferred directly from schema — no separate interface needed
+type BookingFormData = z.infer<typeof bookingSchema>
 ```
 
 ---
 
-### Part B — Dynamic step computation
+### Part B — Step Fields Map
+
+**File:** `utils/bookingSchemas.ts` (addition)
 
 ```ts
-function computeActiveSteps(formData: WizardFormData): WizardStep[] {
-  const base: WizardStep[] = ["school", "destination", "details", "review", "confirm"]
-  if (formData.destinationType === "international") {
-    // Insert "passport" after "destination"
-    return ["school", "destination", "passport", "details", "review", "confirm"]
+// Maps each step to the fields that belong to it
+// Used by trigger() to validate only the current step's fields
+const STEP_FIELDS: Record<WizardStep, (keyof BookingFormData)[]> = {
+  school:      ["schoolName", "contactName", "contactEmail"],
+  destination: ["destinationId", "destinationType"],
+  details:     ["tripDate", "studentCount"],
+  review:      [],
+  confirm:     [],
+}
+```
+
+---
+
+### Part C — `useBookingForm` hook
+
+**File:** `hooks/useBookingForm.ts`
+
+```ts
+function useBookingForm() {
+  // Step navigation — useReducer owns step state only
+  const [stepIndex, dispatch] = useReducer(stepReducer, 0)
+  const currentStep = STEPS[stepIndex]
+
+  // React Hook Form — owns all form data + validation
+  const {
+    register,
+    control,
+    handleSubmit,
+    trigger,
+    formState: { errors, isSubmitting },
+  } = useForm<BookingFormData>({
+    resolver: zodResolver(bookingSchema),
+    defaultValues: {
+      schoolName: "", contactName: "", contactEmail: "",
+      destinationId: undefined, destinationName: "", destinationType: undefined,
+      tripDate: "", studentCount: 1, notes: "",
+    },
+  })
+
+  // Validate current step's fields before advancing
+  const nextStep = async () => {
+    const valid = await trigger(STEP_FIELDS[currentStep])
+    if (valid) dispatch({ type: "NEXT" })
   }
-  return base
-}
-```
 
-**When to recompute:** dispatch `SET_ACTIVE_STEPS` inside `SET_FIELD` when `field === "destinationType"`.
+  const prevStep = () => dispatch({ type: "PREV" })
 
-**In reducer `SET_FIELD` case:**
-```ts
-case "SET_FIELD": {
-  const newFormData = { ...state.formData, [action.field]: action.value }
-  const activeSteps = action.field === "destinationType"
-    ? computeActiveSteps(newFormData)
-    : state.activeSteps
-  const stepIndex = activeSteps.indexOf(state.currentStep)
+  // Final submit — RHF runs full schema validation first
+  const onSubmit = handleSubmit(async (data) => {
+    await fetch("/api/bookings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    })
+  })
+
+  const isFirstStep = stepIndex === 0
+  const isLastStep  = stepIndex === STEPS.length - 1
+  const progress    = Math.round((stepIndex / (STEPS.length - 1)) * 100)
+
   return {
-    ...state,
-    formData: newFormData,
-    activeSteps,
-    stepIndex,
-    errors: { ...state.errors, [action.field]: undefined },
+    currentStep, stepIndex,
+    register, control, errors, isSubmitting,
+    nextStep, prevStep, onSubmit,
+    isFirstStep, isLastStep, progress,
+  }
+}
+
+// Simple step reducer — only handles navigation
+type StepAction = { type: "NEXT" } | { type: "PREV" }
+
+function stepReducer(state: number, action: StepAction): number {
+  switch (action.type) {
+    case "NEXT": return Math.min(state + 1, STEPS.length - 1)
+    case "PREV": return Math.max(state - 1, 0)
+    default:     return state
   }
 }
 ```
 
 ---
 
-### Part C — `SKIP_STEP` action
+### Part D — Step Components with `register` and `Controller`
 
-```ts
-case "SKIP_STEP": {
-  const nextIndex = state.stepIndex + 1
-  if (nextIndex >= state.activeSteps.length) return state
-  return {
-    ...state,
-    errors: {},
-    stepIndex: nextIndex,
-    currentStep: state.activeSteps[nextIndex],
-  }
-}
-```
-
-**Use case:** The "passport" step has a "Skip (I'll add later)" button that dispatches `SKIP_STEP`.
-
----
-
-### Part D — Per-step data fetching with `useEffect`
-
-**In `useBookingWizard` hook:**
-
-```ts
-// Fetch destinations when entering "destination" step
-useEffect(() => {
-  if (state.currentStep !== "destination") return
-  dispatch({ type: "SET_STEP_LOADING", loading: true })
-  fetch("/api/destinations")
-    .then(r => r.json())
-    .then(data => dispatch({ type: "SET_STEP_DATA", data: { destinations: data } }))
-    .catch(err => dispatch({ type: "SUBMIT_ERROR", error: err.message }))
-    .finally(() => dispatch({ type: "SET_STEP_LOADING", loading: false }))
-}, [state.currentStep])
-```
-
-**Reducer cases:**
-```ts
-case "SET_STEP_LOADING":
-  return { ...state, stepLoading: action.loading }
-
-case "SET_STEP_DATA":
-  return { ...state, stepData: { ...state.stepData, ...action.data } }
-```
-
-**In `DestinationStep` component:** read `state.stepData.destinations` to populate the select list.
-
----
-
-### Part E — `UNDO_LAST` action
-
-```ts
-// Every mutating action pushes current state onto history BEFORE modifying:
-case "NEXT_STEP": {
-  const { valid, errors } = validateStep(state.currentStep, state.formData)
-  if (!valid) return { ...state, errors }
-  const nextIndex = state.stepIndex + 1
-  if (nextIndex >= state.activeSteps.length) return state
-  return {
-    ...state,
-    history: [...state.history, state],   // ← save snapshot
-    errors: {},
-    stepIndex: nextIndex,
-    currentStep: state.activeSteps[nextIndex],
-  }
-}
-
-// Similar history push in PREV_STEP, SET_FIELD, SKIP_STEP
-
-case "UNDO_LAST": {
-  if (state.history.length === 0) return state
-  const previous = state.history[state.history.length - 1]
-  return {
-    ...previous,
-    history: state.history.slice(0, -1),  // pop last snapshot
-  }
-}
-```
-
-**History size limit** (prevent memory bloat):
-```ts
-// In each case that pushes to history:
-const trimmedHistory = [...state.history, state].slice(-10)  // keep last 10 states
-return { ...newState, history: trimmedHistory }
-```
-
----
-
-### Part F — Updated `BookingWizard` component additions
+**File:** `components/steps/SchoolStep.tsx`
 
 ```tsx
-const { state, ... } = useBookingWizard()
+// register — for native HTML inputs (text, email, date, number)
+function SchoolStep({ register, errors }) {
+  return (
+    <div className="space-y-4">
+      <div>
+        <label>School Name</label>
+        <input {...register("schoolName")} className="input" />
+        {errors.schoolName && <p className="text-red-500 text-sm">{errors.schoolName.message}</p>}
+      </div>
+      <div>
+        <label>Contact Email</label>
+        <input {...register("contactEmail")} type="email" className="input" />
+        {errors.contactEmail && <p className="text-red-500 text-sm">{errors.contactEmail.message}</p>}
+      </div>
+    </div>
+  )
+}
 
-// Show UNDO button when history exists
-{state.history.length > 0 && (
-  <button onClick={() => dispatch({ type: "UNDO_LAST" })}
-          className="text-sm text-gray-500 hover:text-gray-700">
-    ↩ Undo
-  </button>
-)}
-
-// Step loading spinner overlay
-{state.stepLoading && (
-  <div className="flex justify-center py-12">
-    <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
-  </div>
-)}
-
-// Passport step only appears for international destinations
-{state.currentStep === "passport" && (
-  <PassportStep data={state.formData} errors={state.errors} setField={setField}
-                onSkip={() => dispatch({ type: "SKIP_STEP" })} />
-)}
+// Controller — for custom/controlled inputs (select, custom pickers)
+function DestinationStep({ register, control, errors }) {
+  return (
+    <div className="space-y-4">
+      <Controller
+        name="destinationType"
+        control={control}
+        render={({ field }) => (
+          <select {...field} className="input">
+            <option value="">Select type</option>
+            <option value="domestic">Domestic</option>
+            <option value="international">International</option>
+          </select>
+        )}
+      />
+      {errors.destinationType && (
+        <p className="text-red-500 text-sm">{errors.destinationType.message}</p>
+      )}
+    </div>
+  )
+}
 ```
 
 ---
 
-### Key patterns reference
+### Part E — `BookingWizardRHF` component
 
-```ts
-// Why useReducer over useState for wizards:
-// - Single source of truth: all step transitions in one place
-// - Impossible states prevented: e.g. can't be on step 3 with step 1 data missing
-// - Actions are auditable / loggable (Redux DevTools works with useReducer too)
-// - History/undo is trivial: just push state to array before each transition
-// - Validation centralized in reducer, not scattered across step components
+**File:** `components/BookingWizardRHF.tsx`
 
-// Discriminated union guarantees — TypeScript narrows inside each case:
-//   action.type === "SET_FIELD" → TypeScript knows action.field exists
-//   action.type === "SUBMIT_ERROR" → TypeScript knows action.error exists
+```tsx
+function BookingWizardRHF(): JSX.Element {
+  const {
+    currentStep, stepIndex,
+    register, control, errors, isSubmitting,
+    nextStep, prevStep, onSubmit,
+    isFirstStep, isLastStep, progress,
+  } = useBookingForm()
 
-// RESET returns { ...initialState } (spread) NOT initialState itself
-//   — prevents accidental mutation of the const reference
+  return (
+    <form onSubmit={onSubmit} className="max-w-2xl mx-auto p-6">
+      <WizardProgress steps={STEPS} currentStep={currentStep} stepIndex={stepIndex} progress={progress} />
+
+      <div className="mt-8">
+        {currentStep === "school"      && <SchoolStep      register={register} errors={errors} />}
+        {currentStep === "destination" && <DestinationStep register={register} control={control} errors={errors} />}
+        {currentStep === "details"     && <DetailsStep     register={register} errors={errors} />}
+        {currentStep === "review"      && <ReviewStep      />}
+        {currentStep === "confirm"     && <ConfirmStep     />}
+      </div>
+
+      <div className="flex justify-between mt-8">
+        <button type="button" onClick={prevStep} disabled={isFirstStep}
+                className="px-6 py-2 border rounded-lg disabled:opacity-40">
+          Back
+        </button>
+        {isLastStep
+          ? <button type="submit" disabled={isSubmitting}
+                    className="px-6 py-2 bg-green-600 text-white rounded-lg disabled:opacity-50">
+              {isSubmitting ? "Submitting…" : "Submit Booking"}
+            </button>
+          : <button type="button" onClick={nextStep}
+                    className="px-6 py-2 bg-blue-600 text-white rounded-lg">
+              Next →
+            </button>
+        }
+      </div>
+    </form>
+  )
+}
 ```
+
+---
+
+### What We're Evaluating
+
+- Zod schema per step + `merge()` into full schema
+- `z.infer<typeof bookingSchema>` — type from schema, no duplicate interface
+- `zodResolver(bookingSchema)` — connects RHF + Zod
+- `trigger([...fields])` — validates only current step's fields before advancing
+- `register` vs `Controller` — native inputs vs custom/controlled inputs
+- Single `useForm` instance across all steps — data persists between steps
+- `useReducer` for navigation only — RHF owns form data
+- `type="button"` on Back/Next — prevents accidental form submission
