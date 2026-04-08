@@ -9,20 +9,223 @@
 // app/Support/Result.php  (value object)
 // ============================================================
 
+namespace App\Support;
+
+class Result
+{
+    private function __construct(
+        private readonly bool   $success,
+        private readonly mixed  $value = null,
+        private readonly string $error = '',
+    ) {}
+
+    public static function success(mixed $value): static
+    {
+        return new static(true, $value);
+    }
+
+    public static function failure(string $error): static
+    {
+        return new static(false, null, $error);
+    }
+
+    public function isSuccess(): bool  { return $this->success; }
+    public function value(): mixed     { return $this->value; }
+    public function error(): string    { return $this->error; }
+}
 
 
 // ============================================================
 // app/Services/PaymentService.php  (returns Result instead of throwing)
 // ============================================================
 
+namespace App\Services;
+
+use App\Contracts\BookingServiceInterface;
+use App\Contracts\PaymentGatewayInterface;
+use App\Enums\BookingStatus;
+use App\Models\Booking;
+use App\Models\Payment;
+use App\Support\Result;
+use Illuminate\Support\Facades\DB;
+
+class PaymentService
+{
+    public function __construct(
+        private BookingServiceInterface $bookingService,
+        private PaymentGatewayInterface $gateway,
+    ) {}
+
+    public function processPayment(Booking $booking, array $data): Result
+    {
+        if ($booking->status === BookingStatus::PAID) {
+            return Result::failure('Booking is already paid.');
+        }
+
+        $charge = $this->gateway->charge($booking->amount, 'AED');
+
+        if ($charge->failed()) {
+            return Result::failure($charge->declineReason());
+        }
+
+        $payment = DB::transaction(function () use ($booking, $data, $charge) {
+            $payment = Payment::create([
+                'booking_id'        => $booking->id,
+                'amount'            => $booking->amount,
+                'method'            => $data['payment_method'],
+                'gateway_reference' => $charge->reference(),
+            ]);
+
+            $this->bookingService->markAsPaid($booking, $payment);
+
+            return $payment;
+        });
+
+        return Result::success($payment);
+    }
+}
 
 
 // ============================================================
 // app/Http/Controllers/PaymentController.php  (reads Result → HTTP response)
 // ============================================================
 
+namespace App\Http\Controllers;
+
+use App\Http\Requests\PayingBookingRequest;
+use App\Http\Resources\PaymentResource;
+use App\Models\Booking;
+use App\Services\PaymentService;
+
+class PaymentController extends Controller
+{
+    public function __construct(private PaymentService $paymentService) {}
+
+    public function store(PayingBookingRequest $request, Booking $booking)
+    {
+        $result = $this->paymentService->processPayment($booking, $request->validated());
+
+        if (!$result->isSuccess()) {
+            return response()->json(['message' => $result->error()], 422);
+        }
+
+        return PaymentResource::make($result->value())->response()->setStatusCode(201);
+    }
+}
 
 
 // ============================================================
 // tests/Unit/PaymentServiceTest.php  (mocked dependencies)
 // ============================================================
+
+namespace Tests\Unit;
+
+use App\Contracts\PaymentGatewayInterface;
+use App\Models\Booking;
+use App\Services\PaymentService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\TestCase;
+
+class PaymentServiceTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_successful_payment_returns_success_result(): void
+    {
+        $this->mock(PaymentGatewayInterface::class)
+            ->shouldReceive('charge')
+            ->once()
+            ->andReturn(FakeCharge::succeeded('ch_123'));
+
+        $booking = Booking::factory()->pending()->create();
+        $result  = $this->app->make(PaymentService::class)
+                             ->processPayment($booking, ['payment_method' => 'card']);
+
+        $this->assertTrue($result->isSuccess());
+        $this->assertDatabaseHas('payments', ['booking_id' => $booking->id]);
+    }
+
+    public function test_gateway_decline_returns_failure_result(): void
+    {
+        $this->mock(PaymentGatewayInterface::class)
+            ->shouldReceive('charge')
+            ->once()
+            ->andReturn(FakeCharge::declined('Card declined'));
+
+        $booking = Booking::factory()->pending()->create();
+        $result  = $this->app->make(PaymentService::class)
+                             ->processPayment($booking, ['payment_method' => 'card']);
+
+        $this->assertFalse($result->isSuccess());
+        $this->assertSame('Card declined', $result->error());
+        $this->assertDatabaseMissing('payments', ['booking_id' => $booking->id]);
+    }
+
+    public function test_already_paid_booking_returns_failure_and_gateway_never_called(): void
+    {
+        $this->mock(PaymentGatewayInterface::class)
+            ->shouldNotReceive('charge');
+
+        $booking = Booking::factory()->paid()->create();
+        $result  = $this->app->make(PaymentService::class)
+                             ->processPayment($booking, ['payment_method' => 'card']);
+
+        $this->assertFalse($result->isSuccess());
+        $this->assertSame('Booking is already paid.', $result->error());
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+RESULT PATTERN
+--------------
+• explicit success/failure return type — no exceptions for expected business failures
+• Result::success($value) → wraps the happy-path return value
+• Result::failure('message') → wraps the expected failure with a message
+• controller reads $result->isSuccess() and maps to HTTP response (201 or 422)
+• use exceptions only for unexpected/programming errors — not business logic failures
+• think of Result as a delivery box: success box has $payment inside, failure box has error message
+
+READONLY CONSTRUCTOR PROMOTION
+--------------------------------
+• private readonly bool $success → immutable after construction
+• constructor is private — only created via static factory methods success() / failure()
+• new static(true, $value) → new self but safe if class is extended
+• new static vs new self: new static creates the child class if extended, new self always creates Result
+
+SERVICE MOCKING IN TESTS
+--------------------------
+• $this->mock(Interface::class) → returns a Mockery mock, bound in the container
+• ->shouldReceive('method')->once() → assert method is called exactly once
+• ->shouldNotReceive('charge') → assert method is NEVER called (idempotency test)
+• ->andReturn($fakeValue) → define what the mock returns
+
+ASSERTDATABASEMISSING
+----------------------
+• assertDatabaseMissing('payments', ['booking_id' => $booking->id]) → verifies no row was created
+• use after gateway decline test to confirm no payment row was written
+• complementary to assertDatabaseHas used in the success test
+
+INTERFACE BINDING FOR TESTS
+----------------------------
+• $this->mock(Interface::class) automatically binds the mock in the container per test
+• $this->app->make(PaymentService::class) resolves with the mocked dependencies injected
+• swap only the dependency being tested — leave others as real implementations
+• $this->mock() in tests does the same job as $this->app->bind() in AppServiceProvider
+• in production → bind(Interface::class, StripeGatewayService::class) → real implementation
+• in tests     → mock(Interface::class) → fake implementation
+• when app->make(PaymentService::class) runs, Laravel asks "what is bound for PaymentGatewayInterface?"
+  and injects whatever is currently bound — real in production, mock in tests
+
+ARTISAN
+-------
+• php artisan make:class app/Support/Result → creates the Result value object
+• php artisan make:test tests/Unit/PaymentServiceTest --unit → creates unit test
+• php artisan test tests/Unit/PaymentServiceTest → run this test file only
+
+================================================================
+*/

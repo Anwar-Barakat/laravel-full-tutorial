@@ -9,20 +9,209 @@
 // app/Contracts/BookingServiceInterface.php
 // ============================================================
 
+namespace App\Contracts;
+
+use App\Models\Booking;
+use App\Models\Payment;
+
+interface BookingServiceInterface
+{
+    public function ensurePayable(Booking $booking): void;
+    public function markAsPaid(Booking $booking, Payment $payment): void;
+}
 
 
 // ============================================================
 // app/Services/BookingService.php  (ensurePayable + markAsPaid)
 // ============================================================
 
+namespace App\Services;
+
+use App\Contracts\BookingServiceInterface;
+use App\Enums\BookingStatus;
+use App\Models\Booking;
+use App\Models\Payment;
+
+class BookingService implements BookingServiceInterface
+{
+    public function ensurePayable(Booking $booking): void
+    {
+        if ($booking->status === BookingStatus::PAID) {
+            throw new \LogicException('Booking is already paid.');
+        }
+        if ($booking->status === BookingStatus::CANCELLED) {
+            throw new \LogicException('Cannot pay for a cancelled booking.');
+        }
+    }
+
+    public function markAsPaid(Booking $booking, Payment $payment): void
+    {
+        $booking->update([
+            'status'     => BookingStatus::PAID,
+            'paid_at'    => now(),
+            'payment_id' => $payment->id,
+        ]);
+    }
+}
 
 
 // ============================================================
 // app/Services/PaymentService.php  (orchestrates transaction)
 // ============================================================
 
+namespace App\Services;
+
+use App\Contracts\BookingServiceInterface;
+use App\Contracts\PaymentGatewayInterface;
+use App\Jobs\SendPaymentConfirmation;
+use App\Models\Booking;
+use App\Models\Payment;
+use Illuminate\Support\Facades\DB;
+
+class PaymentService
+{
+    public function __construct(
+        private BookingServiceInterface $bookingService,
+        private PaymentGatewayInterface $gateway,
+    ) {}
+
+    public function processPayment(Booking $booking, array $data): Payment
+    {
+        $this->bookingService->ensurePayable($booking);
+
+        return DB::transaction(function () use ($booking, $data) {
+            $charge = $this->gateway->charge($booking->amount, 'AED');
+
+            $payment = Payment::create([
+                'booking_id'        => $booking->id,
+                'amount'            => $booking->amount,
+                'method'            => $data['payment_method'],
+                'gateway_reference' => $charge->reference(),
+            ]);
+
+            $this->bookingService->markAsPaid($booking, $payment);
+
+            dispatch(new SendPaymentConfirmation($payment));
+
+            return $payment;
+        });
+    }
+}
+
+
+// ============================================================
+// app/Providers/AppServiceProvider.php  (bind interfaces)
+// ============================================================
+
+namespace App\Providers;
+
+use App\Contracts\BookingServiceInterface;
+use App\Contracts\PaymentGatewayInterface;
+use App\Services\BookingService;
+use App\Services\StripeGatewayService;
+use Illuminate\Support\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        $this->app->bind(BookingServiceInterface::class, BookingService::class);
+        $this->app->bind(PaymentGatewayInterface::class, StripeGatewayService::class);
+    }
+
+    public function boot(): void {}
+}
 
 
 // ============================================================
 // app/Http/Controllers/PaymentController.php  (thin — one method call)
 // ============================================================
+
+namespace App\Http\Controllers;
+
+use App\Http\Requests\PayingBookingRequest;
+use App\Http\Resources\PaymentResource;
+use App\Models\Booking;
+use App\Services\PaymentService;
+
+class PaymentController extends Controller
+{
+    public function __construct(private PaymentService $paymentService) {}
+
+    public function store(PayingBookingRequest $request, Booking $booking)
+    {
+        $payment = $this->paymentService->processPayment($booking, $request->validated());
+
+        return PaymentResource::make($payment)->response()->setStatusCode(201);
+    }
+}
+
+
+/*
+================================================================
+TIPS
+================================================================
+
+SERVICE COMPOSITION
+--------------------
+• services call other services — PaymentService depends on BookingService + GatewayService
+• single responsibility: each service owns one domain area
+• never let a controller contain business logic — controller is request/response only
+• thin controller: receive DI, call one method, return resource
+
+INTERFACE INJECTION
+--------------------
+• type-hint interfaces, not concrete classes: BookingServiceInterface $bookingService
+• bind in AppServiceProvider::register(): $this->app->bind(Interface::class, Concrete::class)
+• swap implementations for tests: $this->app->bind(Interface::class, FakeGateway::class)
+• interface decouples callers from implementation details
+
+INTERFACE vs CONTRACT
+----------------------
+• they are the same thing — contract is just the business word for interface
+• interface = PHP syntax keyword
+• contract = what we call that interface when it defines a business rule/agreement
+• Laravel ships its own contracts in Illuminate\Contracts\* (Queue, Auth, Cache...)
+• in an interview: "a contract is an interface — same thing, different vocabulary"
+
+TRANSACTION PLACEMENT
+----------------------
+• DB::transaction() belongs in the service layer — NOT in the controller
+• wrap all DB writes that must be atomic in a single transaction
+• ensurePayable() is called BEFORE the transaction to avoid holding a lock on validation
+• dispatch() jobs inside the transaction closure — Laravel defers them until commit
+
+NON-BLOCKING SIDE EFFECTS
+--------------------------
+• dispatch(new SendPaymentConfirmation($payment)) → queued job, non-blocking
+• queued jobs run after the transaction commits — avoids sending confirmation for a rolled-back payment
+• never send emails, push notifications, or webhooks synchronously inside a transaction
+
+REGISTER vs BOOT vs BIND
+-------------------------
+• register() → runs first at app startup, only put container bindings here
+• boot() → runs after ALL providers are registered, safe to use other services
+• bind() → new instance every time the interface is resolved from the container
+• singleton() → same shared instance across the whole request lifecycle
+• never use other services inside register() — they may not be loaded yet
+• boot() is for: Gates, Blade directives, event listeners, model observers
+
+• think of register() as kitchen setup before the restaurant opens — no customers yet, just preparing
+• think of boot() as the restaurant now open — everything is ready, safe to interact
+• think of bind() as every customer gets a fresh plate — new object each time
+• think of singleton() as one shared pot of soup — same object for everyone in the request
+
+DEPENDENCY INJECTION
+--------------------
+• constructor injection: private PaymentService $paymentService
+• Laravel resolves all constructor dependencies automatically
+• use make() in tests: $service = $this->app->make(PaymentService::class)
+
+ARTISAN
+-------
+• php artisan make:class app/Contracts/BookingServiceInterface → creates interface stub
+• php artisan make:class app/Services/PaymentService → creates service class
+• php artisan make:controller PaymentController → generates controller
+
+================================================================
+*/
